@@ -1,0 +1,12 @@
+[package]
+name = "og-rollout"
+description = "Rollout engine with variance reduction."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+og-core = { path = "../og-core" }
+og-bearoff = { path = "../og-bearoff" }
+og-engine = { path = "../og-engine" }

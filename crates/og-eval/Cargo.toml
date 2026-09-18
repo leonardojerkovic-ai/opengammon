@@ -1,0 +1,11 @@
+[package]
+name = "og-eval"
+description = "Evaluation harness and reference position set."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+og-core = { path = "../og-core" }
+og-engine = { path = "../og-engine" }

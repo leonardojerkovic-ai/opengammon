@@ -1,0 +1,17 @@
+/target
+*.pdb
+
+# Python (training/)
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# editors
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,10 @@
+[package]
+name = "og-formats"
+description = "Parsers for .mat, XG formats, .sgf; .ogn specification and I/O."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+og-core = { path = "../og-core" }

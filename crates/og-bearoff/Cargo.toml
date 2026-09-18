@@ -1,0 +1,10 @@
+[package]
+name = "og-bearoff"
+description = "Bearoff database computation and lookup."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+og-core = { path = "../og-core" }

@@ -1,0 +1,15 @@
+[package]
+name = "og-wasm"
+description = "WASM bindings for the web frontend."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+og-core = { path = "../og-core" }
+og-bearoff = { path = "../og-bearoff" }
+og-engine = { path = "../og-engine" }

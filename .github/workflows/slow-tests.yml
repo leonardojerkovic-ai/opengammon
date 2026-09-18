@@ -1,0 +1,22 @@
+name: Slow tests
+
+on:
+  schedule:
+    - cron: "0 3 * * 1" # every Monday, 03:00 UTC
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ignored:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: run ignored (slow) tests
+        run: cargo test --workspace -- --ignored

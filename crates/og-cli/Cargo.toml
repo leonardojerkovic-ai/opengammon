@@ -1,0 +1,18 @@
+[package]
+name = "og-cli"
+description = "Command-line interface: leobg."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "leobg"
+path = "src/main.rs"
+
+[dependencies]
+og-core = { path = "../og-core" }
+og-bearoff = { path = "../og-bearoff" }
+og-engine = { path = "../og-engine" }
+og-rollout = { path = "../og-rollout" }
+og-formats = { path = "../og-formats" }
