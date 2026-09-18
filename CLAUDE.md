@@ -10,10 +10,10 @@ radi, što se smije, što se ne smije i kako izgleda gotov posao.
 
 > Ovaj odjeljak se ažurira na kraju svake sesije. Ako je zastario, prvo pitaj.
 
-- **Trenutna faza:** 0 — Temelji
-- **Zadnje zatvoreno:** —
+- **Trenutna faza:** 1 — Move generator
+- **Zadnje zatvoreno:** Faza 0 — Temelji (workspace, CI zelen na GitHubu, licenca, CONTRIBUTING, kostur svih crateova)
 - **Otvoreno / u tijeku:** —
-- **Poznati dug:** —
+- **Poznati dug:** WASM build provjera za `og-core` u CI-ju nije dodana (vidi `docs/backlog.md`) — dodaje se kad `og-core` dobije stvarni kod
 
 ---
 
