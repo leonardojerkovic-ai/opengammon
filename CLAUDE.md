@@ -12,8 +12,14 @@ radi, što se smije, što se ne smije i kako izgleda gotov posao.
 
 - **Trenutna faza:** 1 — Move generator
 - **Zadnje zatvoreno:** Faza 0 — Temelji (workspace, CI zelen na GitHubu, licenca, CONTRIBUTING, kostur svih crateova)
-- **Otvoreno / u tijeku:** —
-- **Poznati dug:** WASM build provjera za `og-core` u CI-ju nije dodana (vidi `docs/backlog.md`) — dodaje se kad `og-core` dobije stvarni kod
+- **Otvoreno / u tijeku:**
+  - `Position` (`[i8; 24]`, relativno prema igraču na potezu, konvencija dokumentirana na tipu) + `generate_moves`/`apply` implementirani u `og-core`; svih 7 imenovanih rubnih testova iz OPENGAMMON.md §4 (i CLAUDE.md §5) prolazi.
+  - GNUbg diferencijalni harness radi: `crates/og-core/tests/gnubg_harness.py` (GNUbg-ov Python sloj, ne ASCII parsing) + `crates/og-core/src/gnubg_diff.rs` (8 `#[ignore]`d testova). Potvrđeno na startnoj poziciji i svih 7 rubnih slučajeva — identično GNUbg-u.
+  - Ostaje do definicije "gotovo" Faze 1 (milijun pozicija × 21 bacanje, identičan skup):
+    - generator nasumičnih ali *legalnih* (doigrivih) pozicija — trenutno ga nema
+    - dugoživući `gnubg-cli` proces s petljom zahtjev/odgovor (trenutni harness diže novi proces po pozivu; ne skalira na milijun)
+    - provjera da `MAX_MOVES=5000` u `gnubg.hint()` doista vraća kompletan popis i na gušćim (realističnim, 15-kamena) pozicijama — dosad testirano samo na rijetkim, sintetičkim pozicijama
+- **Poznati dug:** WASM build provjera za `og-core` u CI-ju još nije dodana (vidi `docs/backlog.md`) — uvjet za dodavanje ("kad `og-core` dobije stvarni kod") sad je zadovoljen, pa je ovo sljedeće za pokupiti.
 
 ---
 
