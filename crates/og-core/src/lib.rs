@@ -6,5 +6,8 @@
 mod moves;
 mod position;
 
+#[cfg(test)]
+mod gnubg_diff;
+
 pub use moves::{CheckerMove, Destination, Die, Origin, Ply, PointIndex, Roll};
 pub use position::Position;

@@ -74,7 +74,7 @@ pub struct Ply {
 }
 
 impl Ply {
-    fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Ply { moves: [None; 4] }
     }
 
@@ -82,7 +82,7 @@ impl Ply {
     ///
     /// Panics if already at 4 moves — provably impossible here, since a roll
     /// yields at most 4 dice and callers push at most once per die.
-    fn pushed(mut self, checker_move: CheckerMove) -> Self {
+    pub(crate) fn pushed(mut self, checker_move: CheckerMove) -> Self {
         let slot = self
             .moves
             .iter_mut()
