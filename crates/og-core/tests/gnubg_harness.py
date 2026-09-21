@@ -33,8 +33,11 @@ RESULT_MARKER = "===OG_HARNESS_RESULT==="
 
 # Generous upper bound: GNUbg generates the full legal-move list first and
 # ranks/truncates only for display, but no realistic backgammon position
-# comes close to this many distinct legal plies.
-MAX_MOVES = 5000
+# comes close to this many distinct legal plies. Overridable via
+# OG_HARNESS_MAX_MOVES so a test can compare the real cap against a much
+# larger one and confirm it never actually truncates (see
+# `dense_positions_are_not_truncated_by_max_moves_cap` in gnubg_diff.rs).
+MAX_MOVES = int(os.environ.get("OG_HARNESS_MAX_MOVES", "5000"))
 
 
 def main():

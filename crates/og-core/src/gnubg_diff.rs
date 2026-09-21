@@ -32,9 +32,25 @@ fn gnubg_exe() -> String {
         .expect("GNUBG_PATH must point at gnubg-cli(.exe) to run GNUbg differential tests")
 }
 
+/// The harness's default MAX_MOVES cap (see `gnubg_harness.py`), used by
+/// every differential test except the one that specifically probes whether
+/// that cap is high enough.
+const DEFAULT_MAX_MOVES: u32 = 5000;
+
 /// Runs GNUbg's own move generator for `position` + `roll`, returning the
 /// set of resulting positions it considers legal.
 fn gnubg_resulting_positions(position: &Position, roll: Roll) -> HashSet<Position> {
+    gnubg_resulting_positions_capped(position, roll, DEFAULT_MAX_MOVES)
+}
+
+/// Like [`gnubg_resulting_positions`], but with an explicit override for the
+/// harness's MAX_MOVES cap, to check that cap doesn't silently truncate the
+/// legal-move list on dense positions.
+fn gnubg_resulting_positions_capped(
+    position: &Position,
+    roll: Roll,
+    max_moves: u32,
+) -> HashSet<Position> {
     let bar = position.bar();
     let (d1, d2) = roll.dice();
 
@@ -49,6 +65,7 @@ fn gnubg_resulting_positions(position: &Position, roll: Roll) -> HashSet<Positio
         .arg("-p")
         .arg(harness_script())
         .env("OG_HARNESS_INPUT", &input)
+        .env("OG_HARNESS_MAX_MOVES", max_moves.to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -201,4 +218,48 @@ fn no_legal_moves_matches_gnubg() {
     points[9] = -2;
     let position = Position::from_raw(points, [0, 0], [0, 0]);
     assert_matches_gnubg(&position, Roll::new(Die::new(2), Die::new(3)));
+}
+
+/// The 8 tests above are all sparse, synthetic positions (a handful of
+/// checkers, hand-placed to isolate one rule). CLAUDE.md §0 flags that
+/// MAX_MOVES=5000 has never been checked against dense, realistic
+/// (15-checkers-a-side) positions, where branching is highest. Confirms the
+/// cap doesn't silently drop moves by comparing it against a cap 40x larger
+/// on self-play-generated positions where nobody has borne off yet.
+#[test]
+#[ignore = "requires GNUBG_PATH"]
+fn dense_positions_are_not_truncated_by_max_moves_cap() {
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+
+    use crate::self_play::random_reachable_position;
+
+    let mut rng = StdRng::seed_from_u64(2024);
+    let turn_counts = [4u32, 8, 15];
+
+    for &turns in &turn_counts {
+        for _ in 0..10 {
+            let position = random_reachable_position(&mut rng, turns);
+            assert_eq!(
+                position.off(),
+                [0, 0],
+                "sample should still have all 30 checkers in play"
+            );
+
+            for d1 in 1..=6u8 {
+                for d2 in d1..=6u8 {
+                    let roll = Roll::new(Die::new(d1), Die::new(d2));
+                    let capped =
+                        gnubg_resulting_positions_capped(&position, roll, DEFAULT_MAX_MOVES);
+                    let uncapped = gnubg_resulting_positions_capped(&position, roll, 200_000);
+                    assert_eq!(
+                        capped,
+                        uncapped,
+                        "MAX_MOVES={DEFAULT_MAX_MOVES} silently truncated the legal-move list\nposition: {position:?}\nroll: {roll:?}\nmissing: {:?}",
+                        uncapped.difference(&capped).collect::<Vec<_>>(),
+                    );
+                }
+            }
+        }
+    }
 }
