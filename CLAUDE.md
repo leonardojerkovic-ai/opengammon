@@ -68,6 +68,10 @@ cargo bench -p og-engine
 - CI vrti `fmt`, `clippy -D warnings` i `cargo test --workspace` na svaki push.
 - Spori testovi (`#[ignore]`) vrte se u zasebnom CI jobu, ne na svaki push.
 - Prije nego kažeš da je nešto gotovo, pokreni testove. Ne pretpostavljaj da prolaze.
+- **Dok dugi test (npr. GNUbg diferencijalni run) vrti u pozadini, ne pokreće se nijedna
+  druga `cargo` naredba** — konkurentni `cargo build`/`cargo test` zna zamijeniti testnu
+  binarku usred runa, pa taj proces padne s exit 127. Pričekaj da pozadinski run završi
+  prije sljedećeg `cargo` poziva.
 
 ---
 
