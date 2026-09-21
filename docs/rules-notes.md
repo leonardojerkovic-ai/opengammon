@@ -21,3 +21,34 @@ Each of these calls (dense position, deep `hint()` evaluation) took ~200ms — n
 than the sparse-position calls used for the 8 named tests. This is the concrete cost that
 motivates the persistent gnubg-cli process (CLAUDE.md §0): at ~200ms per spawn, a
 million-position run at 21 rolls each is not viable with one process per call.
+
+## Persistent gnubg-cli process: GNUbg's C core and Python both read stdin — ordering matters
+
+Converting the harness from one-shot (spawn, ask once, exit) to a long-lived request/response
+loop over stdin/stdout (`GnubgSession` in `gnubg_diff.rs`) initially deadlocked every test,
+including the previously-passing sparse ones.
+
+Cause: `gnubg.command("new session")` reads its opening-roll answer ("1 2") via GNUbg's own
+C-level buffered stdio, not through Python. If a second line (the first real request) is
+already sitting in the pipe by the time that C-level read executes, the read can slurp both
+lines into its own internal buffer in one syscall — it only *returns* the first line, but the
+second is now gone from the OS pipe and invisible to Python's separate `sys.stdin` buffer.
+Python then blocks waiting for a line that was already consumed, and the Rust side blocks
+waiting for a response that will never come. The one-shot harness never hit this: it wrote
+"1 2\n", immediately closed stdin (EOF), and never wrote anything else — GNUbg's core doesn't
+touch stdin again once evaluation proceeds from an env var rather than a second stdin line.
+
+Fix: the harness now prints a `READY` marker to stdout right before entering its `for line in
+sys.stdin` request loop, and the Rust side blocks on that marker before writing anything past
+the initial "1 2" handshake. This guarantees nothing else is in the pipe when GNUbg's core does
+its one buffered read, so there is nothing left over for it to steal from Python.
+
+## `gnubg.hint()`'s evaluation depth doesn't affect which moves it returns
+
+Setting `gnubg.command("set evaluation chequerplay evaluation plies 0")` before querying
+`hint()` cut the differential harness's per-query cost by roughly 2.5x (measured: ~46ms/query
+down to ~17ms/query across 1050 self-play-position/roll queries), with identical results on
+every test that exercises it (all 8 named edge cases, the dense/MAX_MOVES check). Expected:
+`hint()`'s evaluation depth only affects how it *ranks* candidates for equity, not the
+enumeration of which moves are legal — the harness discards the ranking and equity entirely and
+only reads back the move list, so this is safe and is now the harness's default setting.
