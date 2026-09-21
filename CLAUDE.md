@@ -13,13 +13,20 @@ radi, što se smije, što se ne smije i kako izgleda gotov posao.
 - **Trenutna faza:** 1 — Move generator
 - **Zadnje zatvoreno:** Faza 0 — Temelji (workspace, CI zelen na GitHubu, licenca, CONTRIBUTING, kostur svih crateova)
 - **Otvoreno / u tijeku:**
-  - `Position` (`[i8; 24]`, relativno prema igraču na potezu, konvencija dokumentirana na tipu) + `generate_moves`/`apply` implementirani u `og-core`; svih 7 imenovanih rubnih testova iz OPENGAMMON.md §4 (i CLAUDE.md §5) prolazi.
-  - GNUbg diferencijalni harness radi: `crates/og-core/tests/gnubg_harness.py` (GNUbg-ov Python sloj, ne ASCII parsing) + `crates/og-core/src/gnubg_diff.rs` (8 `#[ignore]`d testova). Potvrđeno na startnoj poziciji i svih 7 rubnih slučajeva — identično GNUbg-u.
+  - `Position` (`[i8; 24]`, relativno prema igraču na potezu, konvencija dokumentirana na tipu) + `generate_moves`/`apply` implementirani u `og-core`; svih 7 imenovanih rubnih testova iz OPENGAMMON.md §4 (i CLAUDE.md §5) prolazi. Dodan `Position::mirror()` (zamjena perspektive, involucija) — bio nedostajući dio za self-play.
+  - Generator nasumičnih ali *legalnih* (doigrivih) pozicija gotov: `crates/og-core/src/self_play.rs` igra nasumičnu partiju od startne pozicije. `diff_test_sample()` je jedini izvor istine za seed i raspodjelu poteza (lijeni iterator, ne `Vec` — bitno za milijunski uzorak), i `gnubg_diff.rs` i analize u `self_play.rs` čitaju iz njega. Raspodjela po fazama na uzorku od 10 000 (seed `0xb0ad1ce`, broj poteza ~ U(0,120)): kontakt 84.5%, čista trka 15.5%, bearoff-eligible 19.0% (neovisna brojka), kamen na baru 39.3% (neovisna brojka).
+  - GNUbg diferencijalni harness prebačen s "novi proces po svakom pozivu" na dugoživuću sesiju: `GnubgSession` (gnubg_diff.rs) drži jedan `gnubg-cli` proces kroz petlju zahtjev/odgovor (`gnubg_harness.py`). Usput otkriven i popravljen deadlock: GNUbg-ov C-level read za "new session" prompt i Pythonov `sys.stdin` natjecali su se za isti stdin; riješeno READY-handshakeom prije prvog pravog zahtjeva (nalaz u `docs/rules-notes.md`). `hint()` sad radi na 0-ply evaluaciji (samo enumeracija poteza, ne rangiranje) — izmjereno ~2.5× brže, potvrđeno da ne mijenja skup poteza.
+  - Provjera da `MAX_MOVES=5000` ne skraćuje popis na gušćim pozicijama: potvrđeno na 638 parova (pozicija, bacanje) — 8 imenovanih rubnih testova + 30×21 iz self-play uzorka, nasuprot capa 200000. Nalaz u `docs/rules-notes.md`.
+  - **Milijunski test (`random_self_play_positions_match_gnubg`, `OG_DIFF_SAMPLE_SIZE` override) još nije prošao ni na 10k.** Dva pokušaja pala na ~2000–3000 pozicija s "gnubg-cli exited before answering a request" (prazan stderr) — uzrok nije potvrđen. Dvije hipoteze na stolu:
+    1. konkurentna `cargo build`/`cargo test` naredba usred runa zamijenila je testnu binarku (exit 127) — sad pokriveno pravilom u §3 (nijedna druga `cargo` naredba dok dugi test vrti);
+    2. rast memorije 32-bitnog `gnubg-cli.exe` procesa preko desetaka tisuća `hint()` poziva (recikliranje sesije bilo bi rješenje, ali se **ne gradi dok uzrok nije potvrđen**).
+    Treći, izolirani pokušaj (bez ijedne konkurentne `cargo` naredbe, uz praćenje memorije procesa) prekinut je prije završetka zbog promjene prioriteta u sesiji — treba ga ponoviti do kraja prije zaključka.
+  - Neistraženo, uočeno usput: `cargo test -p og-core --lib` (paralelno, debug profil) jednom je pao s exit `0xffffffff` dok je `self_play::tests::phase_distribution_of_the_diff_test_sample` radio usporedno s ostalim testovima; isti test prolazi čisto kad se pokrene izolirano (`cargo test ... phase_distribution_of_the_diff_test_sample`). Moguć stack overflow u debug-modu rekurzivnog `collect_plies` pod paralelnim opterećenjem — treba reproducirati.
   - Ostaje do definicije "gotovo" Faze 1 (milijun pozicija × 21 bacanje, identičan skup):
-    - generator nasumičnih ali *legalnih* (doigrivih) pozicija — trenutno ga nema
-    - dugoživući `gnubg-cli` proces s petljom zahtjev/odgovor (trenutni harness diže novi proces po pozivu; ne skalira na milijun)
-    - provjera da `MAX_MOVES=5000` u `gnubg.hint()` doista vraća kompletan popis i na gušćim (realističnim, 15-kamena) pozicijama — dosad testirano samo na rijetkim, sintetičkim pozicijama
-- **Poznati dug:** WASM build provjera za `og-core` u CI-ju još nije dodana (vidi `docs/backlog.md`) — uvjet za dodavanje ("kad `og-core` dobije stvarni kod") sad je zadovoljen, pa je ovo sljedeće za pokupiti.
+    - čist, dovršen 10k probni run (bez konkurentnih `cargo` naredbi) prije skaliranja dalje
+    - paralelizacija diferencijalnog runa — pri ~17ms/upit (0-ply, izmjereno) jedna sekvencijalna sesija na milijun pozicija × 21 bacanje treba red veličine 100 sati; ne skalira bez paralelnih `GnubgSession`-a
+    - sam milijunski run
+- **Poznati dug:** WASM build provjera za `og-core` u CI-ju još nije dodana (vidi `docs/backlog.md`) — uvjet za dodavanje ("kad `og-core` dobije stvarni kod") sad je zadovoljen, pa je ovo sljedeće za pokupiti. Uz to, gornji neistraženi pad paralelnih testova.
 
 ---
 
