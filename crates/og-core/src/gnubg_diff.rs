@@ -390,30 +390,25 @@ fn dense_positions_are_not_truncated_by_max_moves_cap() {
 #[test]
 #[ignore = "requires GNUBG_PATH; slow -- see module doc"]
 fn random_self_play_positions_match_gnubg() {
-    use rand::rngs::StdRng;
-    use rand::{RngExt, SeedableRng};
+    use crate::self_play::diff_test_sample;
 
-    use crate::self_play::random_reachable_position;
-
-    let sample_size: u32 = env::var("OG_DIFF_SAMPLE_SIZE")
+    let sample_size: usize = env::var("OG_DIFF_SAMPLE_SIZE")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(1_000_000);
 
-    let mut rng = StdRng::seed_from_u64(0xB0A_D1CE);
     let mut session = GnubgSession::spawn();
     let all_rolls: Vec<Roll> = (1..=6u8)
         .flat_map(|d1| (d1..=6u8).map(move |d2| Roll::new(Die::new(d1), Die::new(d2))))
         .collect();
     assert_eq!(all_rolls.len(), 21);
 
-    for i in 0..sample_size {
-        // Spread across the whole game, not just one phase: a random number
-        // of self-play turns per sample, from the opening roll through deep
-        // bearoff.
-        let turns = rng.random_range(0..=120);
-        let position = random_reachable_position(&mut rng, turns);
-
+    // `diff_test_sample` is the one source of truth for this sample's seed
+    // and per-position turn-count draw: any other analysis of "the" Phase 1
+    // sample (e.g. its phase breakdown in self_play.rs) reads it from there
+    // too, and stays in sync with this test by construction rather than by
+    // convention.
+    for (i, position) in diff_test_sample().take(sample_size).enumerate() {
         for &roll in &all_rolls {
             assert_matches_gnubg(&mut session, &position, roll);
         }

@@ -53,6 +53,65 @@ pub(crate) fn random_reachable_position(rng: &mut impl Rng, turns: u32) -> Posit
     }
 }
 
+/// The seed and per-position turn-count distribution behind the Phase 1
+/// differential sample: `gnubg_diff.rs`'s `random_self_play_positions_match_gnubg`
+/// takes its positions from here (`.take(sample_size)`), and so does any other
+/// analysis of that same sample (e.g. its phase breakdown) that wants the
+/// identical sequence without needing GNUbg at all. One source of truth,
+/// consumed lazily: at a million positions, collecting eagerly into a `Vec`
+/// isn't worth the memory when every consumer just wants to iterate once.
+pub(crate) const DIFF_TEST_SEED: u64 = 0xB0A_D1CE;
+pub(crate) const DIFF_TEST_MAX_TURNS: u32 = 120;
+
+pub(crate) fn diff_test_sample() -> impl Iterator<Item = Position> {
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+
+    let mut rng = StdRng::seed_from_u64(DIFF_TEST_SEED);
+    std::iter::from_fn(move || {
+        let turns = rng.random_range(0..=DIFF_TEST_MAX_TURNS);
+        Some(random_reachable_position(&mut rng, turns))
+    })
+}
+
+/// Whether `position` still has contact: some checker of the player on roll
+/// could still be hit by, or still hit, some opponent checker. The player on
+/// roll moves index 23->0 and the opponent moves index 0->23 (see the
+/// `Position` doc), so a specific pair (mine at `i`, theirs at `j`) can still
+/// interact iff `i > j` — contact overall is `max(mine) > min(theirs)`, with
+/// a bar checker on either side standing in as "further back than any board
+/// index" (24 for mine, -1 for theirs) since it hasn't entered yet.
+fn has_contact(position: &Position) -> bool {
+    let mine_max: i32 = if position.bar()[0] > 0 {
+        24
+    } else {
+        (0..24)
+            .filter(|&i| position.point(i) > 0)
+            .map(|i| i as i32)
+            .max()
+            .unwrap_or(-1)
+    };
+    let opponent_min: i32 = if position.bar()[1] > 0 {
+        -1
+    } else {
+        (0..24)
+            .filter(|&i| position.point(i) < 0)
+            .map(|i| i as i32)
+            .min()
+            .unwrap_or(24)
+    };
+    mine_max > opponent_min
+}
+
+/// Whether at least one side is already eligible to bear off: no checkers on
+/// the bar and none outside its own home board. Doesn't imply a race — the
+/// other side can still have an anchor in that home board.
+fn either_side_can_bear_off(position: &Position) -> bool {
+    let mine_home = position.bar()[0] == 0 && (6..24).all(|i| position.point(i) <= 0);
+    let opponent_home = position.bar()[1] == 0 && (0..18).all(|i| position.point(i) >= 0);
+    mine_home || opponent_home
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,6 +179,51 @@ mod tests {
         assert!(
             moved > 190,
             "expected nearly all 5-turn games to have moved, got {moved}/200"
+        );
+    }
+
+    #[test]
+    #[ignore = "analysis, not an assertion -- 10,000 self-play games (up to 120 turns each) \
+                inside one debug-mode test thread is heavy enough to have plausibly caused a \
+                parallel-test-run crash once (see docs/backlog.md); run explicitly with \
+                --release, same as the GNUbg differential tests"]
+    fn phase_distribution_of_the_diff_test_sample() {
+        // Same seed, same sample size, same per-position turn-count draw as
+        // `random_self_play_positions_match_gnubg` in gnubg_diff.rs (its
+        // default OG_DIFF_SAMPLE_SIZE) -- a phase breakdown of exactly the
+        // sample that test runs against GNUbg, without needing GNUbg at all.
+        let sample_size = 10_000;
+        let positions: Vec<Position> = diff_test_sample().take(sample_size).collect();
+
+        let contact = positions.iter().filter(|p| has_contact(p)).count();
+        let race = positions.len() - contact;
+        let bearoff = positions
+            .iter()
+            .filter(|p| either_side_can_bear_off(p))
+            .count();
+        let on_bar = positions
+            .iter()
+            .filter(|p| p.bar()[0] > 0 || p.bar()[1] > 0)
+            .count();
+
+        eprintln!(
+            "phase distribution over {sample_size} positions (seed {DIFF_TEST_SEED:#x}, turns ~ U(0,{DIFF_TEST_MAX_TURNS})):"
+        );
+        eprintln!(
+            "  contact:            {contact} ({:.1}%)",
+            100.0 * contact as f64 / sample_size as f64
+        );
+        eprintln!(
+            "  pure race:          {race} ({:.1}%)",
+            100.0 * race as f64 / sample_size as f64
+        );
+        eprintln!(
+            "  bearoff-eligible:   {bearoff} ({:.1}%)  [independent of contact/race above]",
+            100.0 * bearoff as f64 / sample_size as f64
+        );
+        eprintln!(
+            "  checker on the bar: {on_bar} ({:.1}%)  [independent of the above]",
+            100.0 * on_bar as f64 / sample_size as f64
         );
     }
 
