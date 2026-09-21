@@ -21,6 +21,9 @@ ne obećanje.
 - Ni jedan ne nudi: web, mobilni pristup, API, otvoreni format, moderan analitički sloj.
 - Cubeful odluke u match playu su mjerljivo slabije od odluka o potezima kod svih postojećih botova.
 
+> Tvrdnju o nedostatku modernog otvorenog motora treba preformulirati prije Faze 8 — vidi
+> `docs/prior-art.md` (Open Sage).
+
 ### 1.2 Opseg
 
 U opsegu:
@@ -125,6 +128,12 @@ Redukcija varijance je obavezna, ne opcionalna:
 - zajedničke sekvence kockica za sve kandidate (isti "svijet", različita odluka)
 - antitetičke varijante
 - luck adjustment po potezu
+  - mora koristiti isto pravilo odabira poteza kojim trial stvarno igra (ista dubina, isto
+    razrješenje izjednačenih kandidata, isti evaluator) — razlika daje pristranost koja ne
+    pada s brojem triala
+  - sreća se mjeri na 1-ply neovisno o dubini odlučivanja
+  - broj triala je višekratnik 36; prvo bacanje stratificirano, luck na potezu 0 je točno nula
+- cube odluke unutar triala ne spuštaju se na plići ply kasno u trialu
 - **skraćeni rolloutovi**: 8–12 poluteza pa evaluacija mrežom umjesto igranja do kraja
 
 > Skraćeni rolloutovi su razlika između izvedivog i neizvedivog projekta na malom budžetu.
@@ -133,7 +142,8 @@ Redukcija varijance je obavezna, ne opcionalna:
 Paralelizacija po CPU jezgrama.
 
 **Gotovo kad:** isti rollout s različitim seedovima daje rezultate unutar deklarirane greške;
-izmjereno je koliko je varijanca smanjena u odnosu na naivni rollout.
+izmjereno je koliko je varijanca smanjena u odnosu na naivni rollout; postoji test da je
+konfigurirana dubina odlučivanja doista dubina korištena kroz cijeli trial.
 
 ---
 
@@ -141,6 +151,10 @@ izmjereno je koliko je varijanca smanjena u odnosu na naivni rollout.
 
 - nekoliko tisuća pozicija, stratificirano po fazama igre i tipovima
 - posebno: pozicije gdje se XG i GNUbg razilaze (tu se zapravo dobiva ili gubi)
+  - referentne vrijednosti za te pozicije moraju doći iz rolloutova više od jednog motora, jer
+    rollout jednog motora sustavno daje pravo tom motoru
+- stratifikacija po obiteljima pozicija: deset klasičnih backgamea, containment, masivni
+  backgame, snake
 - mjerenje prosječnog gubitka equityja, **odvojeno za poteze i za cube odluke**
 - automatska usporedba bilo koje dvije verzije motora
 
@@ -174,6 +188,11 @@ U fazi 5 koristi se samo cubeless dio. Glave 1 i 2 se aktiviraju u fazi 9.
 
 **Trening:** TD(λ) self-play od nule, cubeless, epizoda = jedna partija.
 Zatim iterativno produbljivanje rolloutovima vlastitog motora.
+
+Prije velike mreže istrenirati malu jednoslojnu bazu i usporediti snagu **po jedinici vremena
+pretrage**, ne po evaluaciji. Razmotriti finiju podjelu po planu igre od trenutne tri mreže
+(kontakt / trka / bearoff). Nakon svake evaluacije postaviti na nulu vjerojatnosti ishoda koje
+pozicija isključuje.
 
 **Gotovo kad:** na referentnom skupu si unutar mjerljive blizine GNUbg-a u potezima.
 
