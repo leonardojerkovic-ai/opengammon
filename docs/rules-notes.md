@@ -58,3 +58,27 @@ legal — the harness discards the ranking and equity entirely and only reads ba
 This setting is now the harness's default; the differential tests themselves are what would
 catch it if some future GNUbg version ties enumeration or truncation to evaluation depth after
 all.
+
+## `collect_plies`'s recursion depth is bounded by dice count, not by branching factor
+
+Raised as a WASM stack-safety question: could the move generator's recursive DFS
+(`Position::collect_plies` in `moves.rs`) recurse deep enough on a dense, doubles-heavy
+position to be a stack-overflow risk, especially under WASM's much smaller stack?
+
+Proof from the code: each recursive call removes exactly one die from `dice_remaining` (via
+`remove_one`) and never adds one back, so depth is bounded by `dice_remaining.len() + 1`
+regardless of how many legal moves exist at any point — branching factor affects how many
+*sibling* calls happen at a given depth (and so how many leaves accumulate, and how much heap
+allocation happens), never how many levels deep the call stack goes, since the `for` loops visit
+siblings sequentially and only one path is ever live on the stack at a time. Bound: 5 for
+doubles (4 dice), 3 otherwise.
+
+Measured (`recursion_depth_is_bounded_by_dice_count` in `moves.rs`): a depth-tracking mirror of
+`collect_plies` (same recursion structure, tracks max depth instead of collecting leaves), run
+over dense self-play positions (0 to 60 turns in) against every doubles roll — the deepest
+possible chain. Observed max depth: exactly 5, matching the proof.
+
+Conclusion: `collect_plies`'s recursion is not a stack-depth risk, on WASM or anywhere else. An
+iterative rewrite with an explicit stack is not warranted on this basis. See `docs/backlog.md`
+for the parallel-test-run crash that prompted this question — the two turned out to be
+unrelated.

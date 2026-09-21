@@ -390,6 +390,72 @@ mod apply_tests {
 mod generate_moves_tests {
     use super::*;
 
+    /// Mirrors `collect_plies`'s exact recursion structure (same die-value
+    /// loop, same `legal_origins_for_die`/`apply_one`/`remove_one`) but
+    /// tracks recursion depth instead of collecting leaves — a faithful,
+    /// zero-cost-in-production way to answer "how deep does the real
+    /// algorithm actually recurse", not just "how deep could a DFS over N
+    /// dice go in principle".
+    fn collect_plies_depth(
+        position: &Position,
+        dice_remaining: &[Die],
+        depth: u32,
+        max_depth: &mut u32,
+    ) {
+        *max_depth = (*max_depth).max(depth);
+
+        let distinct: BTreeSet<u8> = dice_remaining.iter().map(|d| d.get()).collect();
+        for value in distinct {
+            for checker_move in position.legal_origins_for_die(value) {
+                let mut next_position = *position;
+                next_position.apply_one(checker_move);
+                let next_dice_remaining = remove_one(dice_remaining, value);
+                collect_plies_depth(&next_position, &next_dice_remaining, depth + 1, max_depth);
+            }
+        }
+    }
+
+    #[test]
+    fn recursion_depth_is_bounded_by_dice_count() {
+        // collect_plies removes exactly one die per recursive call and never
+        // adds one back, so depth is bounded by (dice count + 1) regardless
+        // of branching factor: 5 for doubles, 3 otherwise. Branching factor
+        // (how many legal moves exist at a given point) affects how much
+        // *work* each level does and how many leaves accumulate, never how
+        // many levels deep the call stack goes -- siblings in the `for` loop
+        // run sequentially, not concurrently, so only one path is ever live
+        // on the stack at a time.
+        //
+        // Verified here on dense, doubles-heavy positions (the worst case
+        // for branching, per docs/rules-notes.md's MAX_MOVES finding) rather
+        // than just asserted from reading the code.
+        use rand::SeedableRng;
+        use rand::rngs::StdRng;
+
+        use crate::self_play::random_reachable_position;
+
+        let mut rng = StdRng::seed_from_u64(0xDEEC);
+        let mut overall_max = 0u32;
+
+        for turns in [0u32, 2, 4, 8, 15, 30, 60] {
+            for _ in 0..50 {
+                let position = random_reachable_position(&mut rng, turns);
+                for d in 1..=6u8 {
+                    let dice = vec![Die::new(d); 4]; // doubles: the deepest possible chain
+                    let mut max_depth = 0;
+                    collect_plies_depth(&position, &dice, 1, &mut max_depth);
+                    overall_max = overall_max.max(max_depth);
+                }
+            }
+        }
+
+        eprintln!("max collect_plies recursion depth observed: {overall_max}");
+        assert!(
+            overall_max <= 5,
+            "recursion depth {overall_max} exceeds the proven bound (dice count + 1 <= 5) -- the proof or the code has a bug"
+        );
+    }
+
     #[test]
     fn entry_from_bar() {
         // One checker on the bar; the point one step past its entry point is
