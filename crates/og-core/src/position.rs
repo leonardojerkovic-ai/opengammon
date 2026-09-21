@@ -95,6 +95,25 @@ impl Position {
     pub(crate) fn from_raw(points: [i8; 24], bar: [u8; 2], off: [u8; 2]) -> Self {
         Position { points, bar, off }
     }
+
+    /// Switches perspective: the position seen by the player who was "them"
+    /// in `self` becomes "me" here, per the convention documented on this
+    /// type (point `p` maps to point `25 - p`, signs negate, `bar`/`off`
+    /// swap slots). Applying a ply and then mirroring is how a turn passes
+    /// from one player to the other.
+    ///
+    /// An involution: `p.mirror().mirror() == p`.
+    pub fn mirror(&self) -> Position {
+        let mut points = [0i8; 24];
+        for (i, &count) in self.points.iter().enumerate() {
+            points[23 - i] = -count;
+        }
+        Position {
+            points,
+            bar: [self.bar[1], self.bar[0]],
+            off: [self.off[1], self.off[0]],
+        }
+    }
 }
 
 #[cfg(test)]
@@ -135,5 +154,45 @@ mod tests {
             .sum();
         assert_eq!(mine, 15);
         assert_eq!(theirs, 15);
+    }
+
+    #[test]
+    fn mirror_of_starting_position_is_itself() {
+        // The starting position is symmetric: what's "theirs" at point p is
+        // exactly what's "mine" at point 25-p, so mirroring changes nothing.
+        assert_eq!(Position::starting().mirror(), Position::starting());
+    }
+
+    #[test]
+    fn mirror_flips_points_bar_and_off() {
+        let mut points = [0i8; 24];
+        points[0] = 2; // mine, point 1
+        points[23] = -3; // theirs, point 24
+        let position = Position::from_raw(points, [1, 2], [4, 5]);
+
+        let mirrored = position.mirror();
+
+        assert_eq!(
+            mirrored.point(23),
+            -2,
+            "my point 1 checkers are now theirs at point 24"
+        );
+        assert_eq!(
+            mirrored.point(0),
+            3,
+            "their point 24 checkers are now mine at point 1"
+        );
+        assert_eq!(mirrored.bar(), [2, 1], "bar slots swap");
+        assert_eq!(mirrored.off(), [5, 4], "off slots swap");
+    }
+
+    #[test]
+    fn mirror_is_its_own_inverse() {
+        let mut points = [0i8; 24];
+        points[4] = 1;
+        points[9] = -2;
+        let position = Position::from_raw(points, [1, 0], [3, 2]);
+
+        assert_eq!(position.mirror().mirror(), position);
     }
 }

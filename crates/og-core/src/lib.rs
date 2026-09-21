@@ -8,6 +8,8 @@ mod position;
 
 #[cfg(test)]
 mod gnubg_diff;
+#[cfg(test)]
+mod self_play;
 
 pub use moves::{CheckerMove, Destination, Die, Origin, Ply, PointIndex, Roll};
 pub use position::Position;
