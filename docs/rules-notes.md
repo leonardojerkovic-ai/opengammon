@@ -45,10 +45,16 @@ its one buffered read, so there is nothing left over for it to steal from Python
 
 ## `gnubg.hint()`'s evaluation depth doesn't affect which moves it returns
 
-Setting `gnubg.command("set evaluation chequerplay evaluation plies 0")` before querying
-`hint()` cut the differential harness's per-query cost by roughly 2.5x (measured: ~46ms/query
-down to ~17ms/query across 1050 self-play-position/roll queries), with identical results on
-every test that exercises it (all 8 named edge cases, the dense/MAX_MOVES check). Expected:
-`hint()`'s evaluation depth only affects how it *ranks* candidates for equity, not the
-enumeration of which moves are legal — the harness discards the ranking and equity entirely and
-only reads back the move list, so this is safe and is now the harness's default setting.
+Measured: setting `gnubg.command("set evaluation chequerplay evaluation plies 0")` before
+querying `hint()` cut the differential harness's per-query cost by roughly 2.5x (~46ms/query
+down to ~17ms/query across 1050 self-play-position/roll queries). With the setting active, 638
+(position, roll) pairs checked against og-core's own generator in this session still matched
+exactly: the 8 named edge cases (1 roll each) plus the 30 dense self-play positions x 21 rolls
+from the MAX_MOVES check.
+
+Likely explanation, not verified against GNUbg's source: `hint()`'s evaluation depth probably
+only affects how it *ranks* candidates for equity, not the enumeration of which moves are
+legal — the harness discards the ranking and equity entirely and only reads back the move list.
+This setting is now the harness's default; the differential tests themselves are what would
+catch it if some future GNUbg version ties enumeration or truncation to evaluation depth after
+all.
