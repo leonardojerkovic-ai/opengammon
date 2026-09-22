@@ -20,6 +20,10 @@ ne obećanje.
 - GNU Backgammon je open source, ali arhitektura je iz kasnih 1990-ih.
 - Ni jedan ne nudi: web, mobilni pristup, API, otvoreni format, moderan analitički sloj.
 - Cubeful odluke u match playu su mjerljivo slabije od odluka o potezima kod svih postojećih botova.
+- OpenGammon je specijaliziran za match play: meč je primarna jedinica analize, ne pojedinačna
+  partija. Money game ostaje kao validacija temeljne (cubeless) evaluacije poteza — motor mora
+  igrati dobro bez match konteksta prije nego što mu se vjeruje unutar njega — ali nije ciljani
+  teren primjene ni mjerilo uspjeha projekta.
 
 > Tvrdnju o nedostatku modernog otvorenog motora treba preformulirati prije Faze 8 — vidi
 > `docs/prior-art.md` (Open Sage).
@@ -27,7 +31,10 @@ ne obećanje.
 ### 1.2 Opseg
 
 U opsegu:
-- analiza mečeva (primarno)
+- analiza mečeva (primarno) — meč (match equity, rezultat, Crawford, cube odluke kroz cijeli
+  meč) je jedinica analize prema kojoj se motor i alati dizajniraju
+- money game kao validacija temeljne evaluacije poteza (mjerenje bez utjecaja match equityja),
+  ne kao samostalni ciljani teren
 - igra protiv bota (sekundarno, kao demo i ulaz u analizu)
 - otvoreni format i javni API
 
@@ -155,6 +162,11 @@ konfigurirana dubina odlučivanja doista dubina korištena kroz cijeli trial.
     rollout jednog motora sustavno daje pravo tom motoru
 - stratifikacija po obiteljima pozicija: deset klasičnih backgamea, containment, masivni
   backgame, snake
+- stratifikacija po rezultatu meča (away/away parovi za oba igrača, Crawford i post-Crawford
+  odvojeno), s naglaskom na rubne rezultate gdje match equity dominira nad pip countom:
+  DMP (1-away/1-away), gammon-go i gammon-save rezultati, post-Crawford free drop situacije,
+  veliki match equity gradijenti (npr. 2-away/rok igrača protiv 2-away/rok protivnika s
+  gammonima u igri)
 - mjerenje prosječnog gubitka equityja, **odvojeno za poteze i za cube odluke**
 - automatska usporedba bilo koje dvije verzije motora
 
@@ -194,6 +206,15 @@ pretrage**, ne po evaluaciji. Razmotriti finiju podjelu po planu igre od trenutn
 (kontakt / trka / bearoff). Nakon svake evaluacije postaviti na nulu vjerojatnosti ishoda koje
 pozicija isključuje.
 
+**Eksperiment: namjenska DMP mreža.** Istrenirati zasebnu mrežu specijaliziranu za DMP
+(1-away/1-away), cubeless, bez gammona (gammon nema vrijednost na DMP-u pa je taj kanal
+suvišan) i usporediti je s općom mrežom na DMP pozicijama referentnog skupa iz Faze 4. Zadržati
+zasebnu DMP mrežu samo ako je mjerljivo bolja od opće mreže na tim pozicijama; inače je odbaciti.
+Ne generalizirati ovaj pristup na druge rezultate meča — rezultat mijenja **vrijednost**
+pozicije, ne samu poziciju, pa to rješenje pripada match equity sloju i ulaznim kanalima
+(away_us, away_them, Crawford flag iz ulazne reprezentacije iznad), ne umnožavanju arhitektura
+po rezultatu.
+
 **Gotovo kad:** na referentnom skupu si unutar mjerljive blizine GNUbg-a u potezima.
 
 ---
@@ -218,11 +239,16 @@ metapodaci o dubini analize. Objavi kao dokument.
 - ploča, uvoz meča, prikaz analize
 - **radi na mobitelu bez instalacije**
 
-Analitika koju XG nema — ovdje je stvarna prednost:
-- greške klasificirane po **tipu**, ne samo po veličini
-- statistika kroz stotine mečeva, po fazama i tipovima pozicija
-- prepoznavanje ponavljajućih uzoraka kod pojedinog igrača
-- objašnjenja na prirodnom jeziku iznad izlaza motora
+Analitika je formulirana oko **meča kao jedinice**, ne pojedinačne partije — ovo je stvarna
+prednost nad XG-om:
+- greške klasificirane po **tipu**, ne samo po veličini, agregirane na razini meča i kroz
+  mečeve
+- gubitak equityja odvojeno za poteze i za cube odluke, po rezultatu meča (away/away, Crawford)
+  u kojem su se dogodile — jednaka greška u potezu vrijedi drugačije na DMP-u nego usred meča
+- statistika kroz stotine mečeva, po fazama, tipovima pozicija i rezultatu meča
+- prepoznavanje ponavljajućih uzoraka kod pojedinog igrača kroz njegovu povijest mečeva
+- objašnjenja na prirodnom jeziku iznad izlaza motora, s kontekstom meča (rezultat, Crawford,
+  gammon vrijednost) kad je relevantan za odluku
 
 > LLM nikad ne procjenjuje poziciju sam. Dobiva poziciju, kandidate i equity iz motora i
 > samo prevodi u tekst.
@@ -254,6 +280,10 @@ Ovo je istraživački projekt, ne inženjerski. Nema rok i ne obećava se unapri
 - cubeful equity naučen **direktno**, umjesto rekonstrukcije iz cubeless procjene preko
   Janowskijeve formule s cube life indexom
 - meč-level self-play: epizoda je cijeli meč, akcije uključuju double/no-double, take/pass/beaver
+  - skuplje po epizodi od self-playa na razini partije iz Faze 5: epizoda traje više poteza
+    (niz partija do kraja meča, ne jedna partija), grana se dodatno na cube odlukama, i ne može
+    se skratiti istim trikom kao rollout partije jer je cijeli meč jedinica učenja — planirati
+    compute budžet za Fazu 9 s ovim uvećanjem u obzir, ne ekstrapolacijom iz cijene Faze 5
 - match equity tablica prestaje biti zaseban artefakt — postaje implicitna u mreži
 
 Ciljana područja poznatih slabosti: 2-away/2-away, post-Crawford, gammon-go, volatilne
