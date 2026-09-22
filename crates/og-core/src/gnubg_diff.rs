@@ -15,9 +15,12 @@
 
 use std::collections::HashSet;
 use std::env;
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
+use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -251,6 +254,47 @@ fn assert_matches_gnubg(session: &mut GnubgSession, position: &Position, roll: R
     );
 }
 
+/// Splits `n` items into `workers` contiguous, roughly-equal, non-overlapping
+/// `[start, end)` ranges (the first `n % workers` ranges get one extra item),
+/// covering `0..n` with no gaps.
+fn chunk_bounds(n: usize, workers: usize) -> Vec<(usize, usize)> {
+    let base = n / workers;
+    let remainder = n % workers;
+    let mut start = 0;
+    (0..workers)
+        .map(|w| {
+            let size = base + usize::from(w < remainder);
+            let end = start + size;
+            let bounds = (start, end);
+            start = end;
+            bounds
+        })
+        .collect()
+}
+
+#[test]
+fn chunk_bounds_partitions_without_gaps_or_overlap() {
+    for n in [0usize, 1, 20, 21, 1_000_000] {
+        for workers in 1..=16usize {
+            let bounds = chunk_bounds(n, workers);
+            assert_eq!(bounds.len(), workers);
+            assert_eq!(bounds[0].0, 0, "n={n} workers={workers}");
+            assert_eq!(bounds.last().unwrap().1, n, "n={n} workers={workers}");
+            for pair in bounds.windows(2) {
+                assert_eq!(
+                    pair[0].1, pair[1].0,
+                    "gap or overlap between chunks: n={n} workers={workers} bounds={bounds:?}"
+                );
+            }
+            for &(start, end) in &bounds {
+                assert!(start <= end, "n={n} workers={workers} bounds={bounds:?}");
+            }
+            let total: usize = bounds.iter().map(|&(s, e)| e - s).sum();
+            assert_eq!(total, n, "n={n} workers={workers}");
+        }
+    }
+}
+
 #[test]
 #[ignore = "requires GNUBG_PATH"]
 fn starting_position_matches_gnubg() {
@@ -384,9 +428,35 @@ fn dense_positions_are_not_truncated_by_max_moves_cap() {
 
 /// The Phase 1 "done" bar (CLAUDE.md §0): a million random-but-reachable
 /// positions x all 21 rolls, identical legal-move set to GNUbg. Run
-/// explicitly and only on request — this one test alone easily runs for
-/// hours. `OG_DIFF_SAMPLE_SIZE` overrides the position count (e.g. for the
-/// smaller checkpoint runs on the way to a million); default 1_000_000.
+/// explicitly and only on request — sequentially this test runs for on the
+/// order of 100 hours (measured ~17ms/query at 0-ply x 21M queries), so it
+/// parallelizes across `OG_DIFF_WORKERS` independent `GnubgSession`s (each
+/// its own `gnubg-cli` process), one per contiguous, disjoint slice of the
+/// sample.
+///
+/// - `OG_DIFF_SAMPLE_SIZE` overrides the position count (e.g. for the
+///   smaller checkpoint runs on the way to a million); default 1_000_000.
+/// - `OG_DIFF_WORKERS` sets how many `GnubgSession`s run concurrently;
+///   default 1 (sequential, the original behavior). Pick this close to the
+///   machine's core count for an overnight run — each worker is one
+///   `gnubg-cli` process plus this test's own (cheap) move generation.
+/// - `OG_DIFF_CHECKPOINT_DIR` overrides where per-worker progress is
+///   recorded; default `target/gnubg_diff_checkpoint` at the workspace
+///   root (already gitignored). Each worker writes the next global sample
+///   index it has yet to start to `worker_<NN>.txt` after every position it
+///   finishes, so re-running the *same* command after an interruption
+///   (crash, reboot, Ctrl-C) resumes every worker from its own checkpoint
+///   instead of redoing already-verified positions. The checkpoint layout
+///   is keyed to `OG_DIFF_WORKERS`: changing the worker count between runs
+///   makes old checkpoints line up with different ranges, so delete
+///   `OG_DIFF_CHECKPOINT_DIR` first if you do that (or if you want a clean
+///   re-run for any other reason).
+///
+/// A mismatch in any worker stops all of them (checked once per position,
+/// not per roll) rather than letting the others burn hours of GNUbg queries
+/// after the run has already failed; the first mismatch found is what gets
+/// reported, with the same paste-able position/roll detail as the other
+/// differential tests.
 #[test]
 #[ignore = "requires GNUBG_PATH; slow -- see module doc"]
 fn random_self_play_positions_match_gnubg() {
@@ -397,7 +467,23 @@ fn random_self_play_positions_match_gnubg() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(1_000_000);
 
-    let mut session = GnubgSession::spawn();
+    let workers: usize = env::var("OG_DIFF_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&w| w > 0)
+        .unwrap_or(1);
+
+    let checkpoint_dir: PathBuf = env::var("OG_DIFF_CHECKPOINT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("target")
+                .join("gnubg_diff_checkpoint")
+        });
+    fs::create_dir_all(&checkpoint_dir).expect("failed to create checkpoint directory");
+
     let all_rolls: Vec<Roll> = (1..=6u8)
         .flat_map(|d1| (d1..=6u8).map(move |d2| Roll::new(Die::new(d1), Die::new(d2))))
         .collect();
@@ -407,16 +493,86 @@ fn random_self_play_positions_match_gnubg() {
     // and per-position turn-count draw: any other analysis of "the" Phase 1
     // sample (e.g. its phase breakdown in self_play.rs) reads it from there
     // too, and stays in sync with this test by construction rather than by
-    // convention.
-    for (i, position) in diff_test_sample().take(sample_size).enumerate() {
-        for &roll in &all_rolls {
-            assert_matches_gnubg(&mut session, &position, roll);
-        }
+    // convention. Materialized once up front rather than sliced lazily per
+    // worker: it's pure self-play with no GNUbg calls (cheap), and doing it
+    // once avoids every worker but the first re-walking the shared RNG from
+    // zero just to reach its own starting index.
+    let positions: Vec<Position> = diff_test_sample().take(sample_size).collect();
+    assert_eq!(positions.len(), sample_size);
 
-        if i > 0 && i % 1000 == 0 {
-            eprintln!(
-                "random_self_play_positions_match_gnubg: {i}/{sample_size} positions checked"
-            );
+    let bounds = chunk_bounds(sample_size, workers);
+    let failure: Mutex<Option<String>> = Mutex::new(None);
+    let stop = AtomicBool::new(false);
+
+    thread::scope(|scope| {
+        for (worker_id, &(start, end)) in bounds.iter().enumerate() {
+            let positions = &positions;
+            let all_rolls = &all_rolls;
+            let failure = &failure;
+            let stop = &stop;
+            let checkpoint_path = checkpoint_dir.join(format!("worker_{worker_id:02}.txt"));
+
+            scope.spawn(move || {
+                let resume_from = fs::read_to_string(&checkpoint_path)
+                    .ok()
+                    .and_then(|s| s.trim().parse::<usize>().ok())
+                    .filter(|&n| n >= start && n <= end)
+                    .unwrap_or(start);
+
+                if resume_from >= end {
+                    // Already finished by an earlier run of this same
+                    // worker range.
+                    return;
+                }
+
+                let mut session = GnubgSession::spawn();
+
+                let range = positions
+                    .iter()
+                    .enumerate()
+                    .skip(resume_from)
+                    .take(end - resume_from);
+
+                for (i, position) in range {
+                    if stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+
+                    let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
+                        for &roll in all_rolls {
+                            assert_matches_gnubg(&mut session, position, roll);
+                        }
+                    }));
+
+                    if let Err(payload) = outcome {
+                        let message = payload
+                            .downcast_ref::<String>()
+                            .cloned()
+                            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                            .unwrap_or_else(|| "gnubg differential mismatch".to_string());
+                        let mut guard = failure.lock().unwrap();
+                        if guard.is_none() {
+                            *guard = Some(format!("worker {worker_id}, sample index {i}: {message}"));
+                        }
+                        drop(guard);
+                        stop.store(true, Ordering::Relaxed);
+                        return;
+                    }
+
+                    fs::write(&checkpoint_path, (i + 1).to_string())
+                        .expect("failed to write checkpoint file");
+
+                    if (i - start) % 1000 == 0 {
+                        eprintln!(
+                            "random_self_play_positions_match_gnubg: worker {worker_id} at {i}/{end} (sample {sample_size} total)"
+                        );
+                    }
+                }
+            });
         }
+    });
+
+    if let Some(message) = failure.into_inner().unwrap() {
+        panic!("{message}");
     }
 }
