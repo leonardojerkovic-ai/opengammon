@@ -5,6 +5,7 @@
 
 pub mod combinatorial;
 pub mod one_sided;
+pub mod quantize;
 
 #[cfg(test)]
 mod gnubg_diff;

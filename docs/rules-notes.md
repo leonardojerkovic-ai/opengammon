@@ -208,6 +208,33 @@ roll count, so the two needed a one-row shift when comparing — missing it init
 The 300-position run is the largest so far; the full Phase 2 "done" run (the actual sample size
 Phase 2 commits to) is still open.
 
+## Quantization for compressed storage: exact sum, error absorbed at the largest values
+
+`crates/og-bearoff/src/quantize.rs`. Each probability becomes a `u16` (`round(p * SCALE)`,
+`SCALE = u16::MAX = 65535`), 4x smaller than `f64`. Decision, made explicit rather than left
+implicit in the code: the **sum invariant is kept exact in storage**, not restored by
+renormalizing at read time. The last value in a distribution is never independently rounded — it's
+set to whatever's left after the others (`SCALE` minus their sum), so the stored `u16`s always sum
+to exactly `SCALE`. The alternative (round every value independently, renormalize with a float
+divide on every lookup) was rejected because it would put a division on the hot path Phase 2's
+"lookup under a microsecond" target cares about, for a correction that can be paid once, at build
+time, for free.
+
+That alone isn't quite enough: independently rounding ~30 values can overshoot `SCALE` by a few
+units (confirmed on the real table, not assumed — a distribution with 19 nonzero values rounded to
+a prefix sum of 65536, one over). When that happens, the overshoot is taken back one unit at a time
+from whichever value is currently largest, not from the last bucket. The last bucket is where a
+bearoff distribution's smallest, most negligible probability mass lives (the long tail); pushing
+correction error there would be the worst place to put it. Taking it from the largest value instead
+costs it a negligible *relative* error.
+
+Checked exhaustively — 54,264 `finish` distributions and 15,504 `first_off` ones (only positions
+with `off == 0` have real `first_off` data — see above), not a sample, since the whole space is
+small enough to check all of it: every quantized distribution sums to exactly `SCALE`; measured
+worst-case round-trip error was 6.1e-5 for `finish`, 2.0e-5 for `first_off` — both far below
+`1 / SCALE` scaled up by the largest-value correction's small headroom, and both already smaller
+than the ~0.0005 absolute (percentage-point) precision the GNUbg comparison itself works at.
+
 ## The Monte Carlo cross-check validates the DP's recursion, not its play-selection rule
 
 `crates/og-bearoff/src/one_sided.rs`'s `monte_carlo_validation` tests simulate many real games and
