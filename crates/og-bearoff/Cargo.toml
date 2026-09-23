@@ -8,3 +8,6 @@ repository.workspace = true
 
 [dependencies]
 og-core = { path = "../og-core" }
+
+[dev-dependencies]
+rand = "0.10.3"

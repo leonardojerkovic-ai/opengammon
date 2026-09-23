@@ -2,7 +2,7 @@
 //! dynamic programming. See `OPENGAMMON.md` Phase 2 and `docs/rules-notes.md` for the
 //! "minimize own expected rolls" limitation this database's values are built on.
 
-use og_core::{Die, Position, Roll};
+use og_core::{Die, Ply, Position, Roll};
 
 use crate::combinatorial;
 
@@ -113,6 +113,57 @@ fn position_for(checkers: [u8; POINTS]) -> Position {
     )
 }
 
+/// Picks whichever `plies` leads to the position with the lowest expected rolls left
+/// to finish, per `child_mean` (a lookup from a resulting position's rank index to its
+/// already-known expected-rolls value). Shared between the DP build (where `child_mean`
+/// reads from the table-in-progress) and the Monte Carlo validation below (where it
+/// reads from the finished table) so both use the exact same selection policy.
+///
+/// Ties are broken by lowest resulting rank index, arbitrarily but deterministically: a
+/// genuine tie in expected value is expected to be a tie in the full distribution too
+/// for pure bearoff (see `docs/rules-notes.md`), so the tie-break shouldn't matter in
+/// practice.
+///
+/// # Panics
+/// Panics if `plies` is empty.
+fn choose_best_ply(
+    position: &Position,
+    total_checkers: u32,
+    plies: &[Ply],
+    child_mean: impl Fn(usize) -> f64,
+) -> ([u8; POINTS], bool) {
+    let mut best: Option<([u8; POINTS], usize, bool, f64)> = None;
+    for ply in plies {
+        let resulting = position.apply(ply);
+        let mut resulting_checkers = [0u8; POINTS];
+        for (i, slot) in resulting_checkers.iter_mut().enumerate() {
+            let c = resulting.point(i);
+            debug_assert!(
+                c >= 0,
+                "one-sided position never produces opponent checkers"
+            );
+            *slot = c as u8;
+        }
+        let resulting_total: u32 = resulting_checkers.iter().map(|&c| c as u32).sum();
+        let child_index = combinatorial::rank(MAX_CHECKERS, resulting_checkers);
+        let expected = child_mean(child_index);
+        let bore_off = resulting_total < total_checkers;
+
+        let better = match &best {
+            None => true,
+            Some((_, best_index, _, best_expected)) => {
+                expected < *best_expected
+                    || (expected == *best_expected && child_index < *best_index)
+            }
+        };
+        if better {
+            best = Some((resulting_checkers, child_index, bore_off, expected));
+        }
+    }
+    let (checkers, _, bore_off, _) = best.expect("plies is non-empty");
+    (checkers, bore_off)
+}
+
 fn compute_entry(
     checkers: [u8; POINTS],
     rolls: &[(Roll, f64)],
@@ -129,11 +180,8 @@ fn compute_entry(
     let position = position_for(checkers);
 
     // For each roll, pick the legal play minimizing the expected number of rolls left
-    // to finish (using children's already-computed `finish` means — every child has
-    // strictly fewer pips, so it's already in `entries`). Ties are broken by lowest
-    // resulting index, arbitrarily but deterministically: a genuine tie in expected
-    // value is expected to be a tie in the full distribution too for pure bearoff
-    // (see docs/rules-notes.md), so the tie-break shouldn't matter in practice.
+    // to finish, using children's already-computed `finish` means — every child has
+    // strictly fewer pips, so it's already in `entries`.
     let mut chosen: Vec<(usize, bool)> = Vec::with_capacity(rolls.len());
     for &(roll, _weight) in rolls {
         let plies = position.generate_moves(roll);
@@ -142,42 +190,20 @@ fn compute_entry(
             "a one-sided position with checkers remaining and no opponent always has a legal move"
         );
 
-        let mut best: Option<(usize, bool, f64)> = None;
-        for ply in &plies {
-            let resulting = position.apply(ply);
-            let mut resulting_checkers = [0u8; POINTS];
-            for (i, slot) in resulting_checkers.iter_mut().enumerate() {
-                let c = resulting.point(i);
-                debug_assert!(
-                    c >= 0,
-                    "one-sided position never produces opponent checkers"
-                );
-                *slot = c as u8;
-            }
-            let resulting_total: u32 = resulting_checkers.iter().map(|&c| c as u32).sum();
-            let child_index = combinatorial::rank(MAX_CHECKERS, resulting_checkers);
-            let child_finish = &entries[child_index]
-                .as_ref()
-                .unwrap_or_else(|| {
-                    panic!("child {child_index} has strictly fewer pips than its parent and should already be computed")
-                })
-                .finish;
-            let expected = mean(child_finish);
-            let bore_off = resulting_total < total_checkers;
-
-            let better = match best {
-                None => true,
-                Some((best_index, _, best_expected)) => {
-                    expected < best_expected
-                        || (expected == best_expected && child_index < best_index)
-                }
-            };
-            if better {
-                best = Some((child_index, bore_off, expected));
-            }
-        }
-        let (child_index, bore_off, _) = best.expect("plies is non-empty");
-        chosen.push((child_index, bore_off));
+        let (child_checkers, bore_off) = choose_best_ply(
+            &position,
+            total_checkers,
+            &plies,
+            |index| {
+                mean(&entries[index]
+                    .as_ref()
+                    .unwrap_or_else(|| {
+                        panic!("child {index} has strictly fewer pips than its parent and should already be computed")
+                    })
+                    .finish)
+            },
+        );
+        chosen.push((combinatorial::rank(MAX_CHECKERS, child_checkers), bore_off));
     }
 
     let mut finish_len = 1;
@@ -313,6 +339,128 @@ mod tests {
         let worst_support = worst.finish.len();
         for entry in table() {
             assert!(entry.finish.len() <= worst_support);
+        }
+    }
+
+    /// Cross-checks the DP against an independent method: actually play a position to
+    /// completion many times with real random dice, using the exact same policy
+    /// ([`choose_best_ply`]) the DP used to build the table, and count rolls. If the DP
+    /// has a bug, this measures the true distribution of that policy by brute force and
+    /// won't reproduce the DP's (wrong) answer — unlike comparing the DP against GNUbg,
+    /// this doesn't depend on the DP being right about anything, only on `generate_moves`
+    /// and `choose_best_ply` being correct, which the simulation exercises directly.
+    mod monte_carlo_validation {
+        use rand::rngs::StdRng;
+        use rand::{RngExt, SeedableRng};
+
+        use super::*;
+
+        /// Plays `start` to completion once, returning (rolls to bear off the first
+        /// checker, rolls to bear off the last checker).
+        fn play_once(start: [u8; POINTS], table: &[Entry], rng: &mut StdRng) -> (u32, u32) {
+            let mut checkers = start;
+            let mut total: u32 = checkers.iter().map(|&c| c as u32).sum();
+            let mut rolls = 0u32;
+            let mut first_off = None;
+
+            while total > 0 {
+                rolls += 1;
+                let roll = Roll::new(
+                    Die::new(rng.random_range(1..=6)),
+                    Die::new(rng.random_range(1..=6)),
+                );
+                let position = position_for(checkers);
+                let plies = position.generate_moves(roll);
+                assert!(!plies.is_empty(), "checkers remain, so a legal move exists");
+
+                let (next_checkers, bore_off) =
+                    choose_best_ply(&position, total, &plies, |index| mean(&table[index].finish));
+                if bore_off && first_off.is_none() {
+                    first_off = Some(rolls);
+                }
+                checkers = next_checkers;
+                total = checkers.iter().map(|&c| c as u32).sum();
+            }
+
+            (
+                first_off.expect("total reached 0, so at least one bear-off happened"),
+                rolls,
+            )
+        }
+
+        /// Mean and variance of a rolls-needed distribution, where index `i` represents
+        /// `i + roll_offset` rolls: `roll_offset` is 0 for `finish` (index r = r rolls)
+        /// and 1 for `first_off` (index 0 = 1 roll, per its documented convention).
+        fn mean_and_variance(distribution: &[f64], roll_offset: f64) -> (f64, f64) {
+            let m = mean(distribution) + roll_offset;
+            let var: f64 = distribution
+                .iter()
+                .enumerate()
+                .map(|(i, &p)| (i as f64 + roll_offset - m).powi(2) * p)
+                .sum();
+            (m, var)
+        }
+
+        /// Runs `trials` simulated games from `start` and asserts the empirical mean
+        /// number of rolls (to first and to last checker off) is within
+        /// `tolerance_sigmas` standard errors of the DP's exact mean. A deliberately
+        /// loose tolerance: this is a cheap sanity check against gross DP bugs, not a
+        /// precise statistical test.
+        fn assert_simulation_matches_dp(start: [u8; POINTS], trials: u32, seed: u64) {
+            let table = table();
+            let entry = lookup(table, start);
+            let (exact_finish_mean, exact_finish_var) = mean_and_variance(&entry.finish, 0.0);
+            let (exact_first_off_mean, exact_first_off_var) =
+                mean_and_variance(&entry.first_off, 1.0);
+
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut finish_sum = 0u64;
+            let mut first_off_sum = 0u64;
+            for _ in 0..trials {
+                let (first_off, finish) = play_once(start, table, &mut rng);
+                finish_sum += finish as u64;
+                first_off_sum += first_off as u64;
+            }
+            let empirical_finish_mean = finish_sum as f64 / trials as f64;
+            let empirical_first_off_mean = first_off_sum as f64 / trials as f64;
+
+            let tolerance_sigmas = 5.0;
+            // The epsilon floor covers a deterministic exact distribution (variance
+            // exactly 0, e.g. a position that always finishes in exactly N rolls):
+            // without it, even a perfect match (diff == 0) would fail `< 0`.
+            let finish_threshold =
+                tolerance_sigmas * (exact_finish_var / trials as f64).sqrt() + 1e-9;
+            let first_off_threshold =
+                tolerance_sigmas * (exact_first_off_var / trials as f64).sqrt() + 1e-9;
+
+            assert!(
+                (empirical_finish_mean - exact_finish_mean).abs() < finish_threshold,
+                "finish mean: simulated {empirical_finish_mean} vs exact {exact_finish_mean} \
+                 (threshold {finish_threshold}, {trials} trials)"
+            );
+            assert!(
+                (empirical_first_off_mean - exact_first_off_mean).abs() < first_off_threshold,
+                "first_off mean: simulated {empirical_first_off_mean} vs exact {exact_first_off_mean} \
+                 (threshold {first_off_threshold}, {trials} trials)"
+            );
+        }
+
+        #[test]
+        #[ignore = "slow: tens of thousands of simulated games"]
+        fn matches_dp_for_the_worst_position() {
+            assert_simulation_matches_dp(checkers(&[(6, 15)]), 50_000, 0xb0ad1ce);
+        }
+
+        #[test]
+        #[ignore = "slow: tens of thousands of simulated games"]
+        fn matches_dp_for_a_spread_position() {
+            // 2 checkers on each of the 6 points, 3 extra on point 6: sums to 15,
+            // structurally different from the fully stacked worst case.
+            assert_simulation_matches_dp(
+                checkers(&[(1, 2), (2, 2), (3, 2), (4, 2), (5, 2), (6, 5)]),
+                50_000,
+                0xb0ad1ce,
+            );
         }
     }
 }
