@@ -311,7 +311,7 @@ fn starting_position_matches_gnubg() {
 fn entry_from_bar_matches_gnubg() {
     let mut points = [0i8; 24];
     points[18] = -2;
-    let position = Position::from_raw(points, [1, 0], [0, 0]);
+    let position = Position::from_raw_unchecked(points, [1, 0], [0, 0]);
     let mut session = GnubgSession::spawn();
     assert_matches_gnubg(&mut session, &position, Roll::new(Die::new(3), Die::new(3)));
 }
@@ -322,7 +322,7 @@ fn entry_from_bar_blocked_matches_gnubg() {
     let mut points = [0i8; 24];
     points[18..24].fill(-2);
     points[12] = 1;
-    let position = Position::from_raw(points, [1, 0], [0, 0]);
+    let position = Position::from_raw_unchecked(points, [1, 0], [0, 0]);
     let mut session = GnubgSession::spawn();
     assert_matches_gnubg(&mut session, &position, Roll::new(Die::new(2), Die::new(5)));
 }
@@ -333,7 +333,7 @@ fn forced_higher_die_when_only_one_playable_matches_gnubg() {
     let mut points = [0i8; 24];
     points[12] = 1;
     points[3] = -2;
-    let position = Position::from_raw(points, [0, 0], [0, 0]);
+    let position = Position::from_raw_unchecked(points, [0, 0], [0, 0]);
     let mut session = GnubgSession::spawn();
     assert_matches_gnubg(&mut session, &position, Roll::new(Die::new(3), Die::new(6)));
 }
@@ -344,7 +344,7 @@ fn doubles_with_fewer_than_four_moves_matches_gnubg() {
     let mut points = [0i8; 24];
     points[12] = 1;
     points[0] = -2;
-    let position = Position::from_raw(points, [0, 0], [0, 0]);
+    let position = Position::from_raw_unchecked(points, [0, 0], [0, 0]);
     let mut session = GnubgSession::spawn();
     assert_matches_gnubg(&mut session, &position, Roll::new(Die::new(4), Die::new(4)));
 }
@@ -355,7 +355,7 @@ fn bearoff_requires_all_checkers_home_matches_gnubg() {
     let mut points = [0i8; 24];
     points[5] = 1;
     points[12] = 1;
-    let position = Position::from_raw(points, [0, 0], [0, 0]);
+    let position = Position::from_raw_unchecked(points, [0, 0], [0, 0]);
     let mut session = GnubgSession::spawn();
     assert_matches_gnubg(&mut session, &position, Roll::new(Die::new(6), Die::new(6)));
 }
@@ -365,7 +365,7 @@ fn bearoff_requires_all_checkers_home_matches_gnubg() {
 fn bearoff_from_higher_die_matches_gnubg() {
     let mut points = [0i8; 24];
     points[2] = 1;
-    let position = Position::from_raw(points, [0, 0], [0, 0]);
+    let position = Position::from_raw_unchecked(points, [0, 0], [0, 0]);
     let mut session = GnubgSession::spawn();
     assert_matches_gnubg(&mut session, &position, Roll::new(Die::new(6), Die::new(6)));
 }
@@ -377,7 +377,7 @@ fn no_legal_moves_matches_gnubg() {
     points[12] = 1;
     points[10] = -2;
     points[9] = -2;
-    let position = Position::from_raw(points, [0, 0], [0, 0]);
+    let position = Position::from_raw_unchecked(points, [0, 0], [0, 0]);
     let mut session = GnubgSession::spawn();
     assert_matches_gnubg(&mut session, &position, Roll::new(Die::new(2), Die::new(3)));
 }

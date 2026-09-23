@@ -339,7 +339,7 @@ mod apply_tests {
         let mut points = [0i8; 24];
         points[10] = 1; // mine
         points[5] = -1; // opponent's lone blot
-        let position = Position::from_raw(points, [0, 0], [0, 0]);
+        let position = Position::from_raw_unchecked(points, [0, 0], [0, 0]);
 
         let ply = Ply::empty().pushed(CheckerMove {
             from: Origin::Point(PointIndex::new(10)),
@@ -357,7 +357,7 @@ mod apply_tests {
 
     #[test]
     fn apply_enters_from_the_bar() {
-        let position = Position::from_raw([0i8; 24], [1, 0], [0, 0]);
+        let position = Position::from_raw_unchecked([0i8; 24], [1, 0], [0, 0]);
 
         let ply = Ply::empty().pushed(CheckerMove {
             from: Origin::Bar,
@@ -373,7 +373,7 @@ mod apply_tests {
     fn apply_bears_off() {
         let mut points = [0i8; 24];
         points[2] = 1;
-        let position = Position::from_raw(points, [0, 0], [0, 0]);
+        let position = Position::from_raw_unchecked(points, [0, 0], [0, 0]);
 
         let ply = Ply::empty().pushed(CheckerMove {
             from: Origin::Point(PointIndex::new(2)),
@@ -462,7 +462,7 @@ mod generate_moves_tests {
         // blocked, so exactly one die is usable: the entry itself.
         let mut points = [0i8; 24];
         points[18] = -2; // blocks continuing past the entry point
-        let position = Position::from_raw(points, [1, 0], [0, 0]);
+        let position = Position::from_raw_unchecked(points, [1, 0], [0, 0]);
 
         let roll = Roll::new(Die::new(3), Die::new(3)); // double: no higher-die tiebreak to worry about
         let moves = position.generate_moves(roll);
@@ -486,7 +486,7 @@ mod generate_moves_tests {
         let mut points = [0i8; 24];
         points[18..24].fill(-2);
         points[12] = 1; // would be movable if the bar didn't take precedence
-        let position = Position::from_raw(points, [1, 0], [0, 0]);
+        let position = Position::from_raw_unchecked(points, [1, 0], [0, 0]);
 
         let roll = Roll::new(Die::new(2), Die::new(5));
         assert!(position.generate_moves(roll).is_empty());
@@ -500,7 +500,7 @@ mod generate_moves_tests {
         let mut points = [0i8; 24];
         points[12] = 1; // point 13
         points[3] = -2; // point 4, blocks the point both orderings need next
-        let position = Position::from_raw(points, [0, 0], [0, 0]);
+        let position = Position::from_raw_unchecked(points, [0, 0], [0, 0]);
 
         let roll = Roll::new(Die::new(3), Die::new(6));
         let moves = position.generate_moves(roll);
@@ -520,7 +520,7 @@ mod generate_moves_tests {
         let mut points = [0i8; 24];
         points[12] = 1; // point 13
         points[0] = -2; // point 1, blocks the third 4
-        let position = Position::from_raw(points, [0, 0], [0, 0]);
+        let position = Position::from_raw_unchecked(points, [0, 0], [0, 0]);
 
         let roll = Roll::new(Die::new(4), Die::new(4));
         let moves = position.generate_moves(roll);
@@ -543,7 +543,7 @@ mod generate_moves_tests {
         let mut points = [0i8; 24];
         points[5] = 1; // point 6, home
         points[12] = 1; // point 13, not home
-        let position = Position::from_raw(points, [0, 0], [0, 0]);
+        let position = Position::from_raw_unchecked(points, [0, 0], [0, 0]);
 
         let roll = Roll::new(Die::new(6), Die::new(6));
         let moves = position.generate_moves(roll);
@@ -564,7 +564,7 @@ mod generate_moves_tests {
         // so a 6 (bigger than the point number) can still bear it off.
         let mut points = [0i8; 24];
         points[2] = 1; // point 3
-        let position = Position::from_raw(points, [0, 0], [0, 0]);
+        let position = Position::from_raw_unchecked(points, [0, 0], [0, 0]);
 
         let roll = Roll::new(Die::new(6), Die::new(6));
         let moves = position.generate_moves(roll);
@@ -589,7 +589,7 @@ mod generate_moves_tests {
         points[12] = 1; // point 13
         points[10] = -2; // blocks the 2
         points[9] = -2; // blocks the 3
-        let position = Position::from_raw(points, [0, 0], [0, 0]);
+        let position = Position::from_raw_unchecked(points, [0, 0], [0, 0]);
 
         let roll = Roll::new(Die::new(2), Die::new(3));
         assert!(position.generate_moves(roll).is_empty());

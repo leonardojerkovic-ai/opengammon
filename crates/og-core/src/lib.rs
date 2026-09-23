@@ -12,4 +12,4 @@ mod gnubg_diff;
 mod self_play;
 
 pub use moves::{CheckerMove, Destination, Die, Origin, Ply, PointIndex, Roll};
-pub use position::Position;
+pub use position::{Position, PositionError};

@@ -47,6 +47,33 @@ pub struct Position {
     pub(crate) off: [u8; 2],
 }
 
+/// A raw field combination passed to [`Position::from_raw`] that cannot represent any
+/// real or partial backgammon state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PositionError {
+    /// One side's checkers (points, bar, and off combined) sum to more than 15.
+    /// `mine` says which side; `count` is the sum that was too high.
+    TooManyCheckers { mine: bool, count: u32 },
+}
+
+impl std::fmt::Display for PositionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PositionError::TooManyCheckers { mine: true, count } => {
+                write!(
+                    f,
+                    "player on roll has {count} checkers, more than the 15 allowed"
+                )
+            }
+            PositionError::TooManyCheckers { mine: false, count } => {
+                write!(f, "opponent has {count} checkers, more than the 15 allowed")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PositionError {}
+
 impl Position {
     /// The standard starting position, from the perspective of the player on roll.
     ///
@@ -89,10 +116,61 @@ impl Position {
 
     /// Builds a position directly from raw fields, bypassing `starting()`.
     ///
-    /// Test-only: does not validate checker-count invariants (e.g. 15 per side).
-    /// Move generation tests use this to set up minimal, targeted board states.
+    /// Validates that each side has at most 15 checkers across points, bar, and off
+    /// combined. Deliberately accepts *partial* positions — e.g. only one side's
+    /// checkers set, the rest zero — not just complete, legal two-sided boards: a
+    /// one-sided bearoff computation (`og-bearoff`) only knows about one side's
+    /// checkers and has no need to invent a real opponent to satisfy this constructor.
+    /// It does not check finer invariants such as reachability from the starting
+    /// position, since "at most 15 checkers" is the only invariant every caller
+    /// actually depends on.
+    ///
+    /// # Errors
+    /// Returns [`PositionError`] if either side's checkers (positive `points` values,
+    /// or negative ones by absolute value, plus that side's `bar` and `off` slot) sum
+    /// to more than 15.
+    pub fn from_raw(points: [i8; 24], bar: [u8; 2], off: [u8; 2]) -> Result<Self, PositionError> {
+        let mine: u32 = points
+            .iter()
+            .filter(|&&c| c > 0)
+            .map(|&c| c as u32)
+            .sum::<u32>()
+            + bar[0] as u32
+            + off[0] as u32;
+        if mine > 15 {
+            return Err(PositionError::TooManyCheckers {
+                mine: true,
+                count: mine,
+            });
+        }
+
+        let theirs: u32 = points
+            .iter()
+            .filter(|&&c| c < 0)
+            .map(|&c| (-c) as u32)
+            .sum::<u32>()
+            + bar[1] as u32
+            + off[1] as u32;
+        if theirs > 15 {
+            return Err(PositionError::TooManyCheckers {
+                mine: false,
+                count: theirs,
+            });
+        }
+
+        Ok(Position { points, bar, off })
+    }
+
+    /// Builds a position directly from raw fields, without validating the
+    /// at-most-15-checkers-per-side invariant that [`from_raw`](Self::from_raw) checks.
+    ///
+    /// Crate-internal only: for hot paths that only ever transform an
+    /// already-known-valid `Position` (where re-validating on every call would be
+    /// pure overhead), and for tests that need minimal, targeted board states without
+    /// paying attention to the invariant at all. `#[cfg(test)]` for now since no
+    /// non-test caller exists yet — drop the gate when one does.
     #[cfg(test)]
-    pub(crate) fn from_raw(points: [i8; 24], bar: [u8; 2], off: [u8; 2]) -> Self {
+    pub(crate) fn from_raw_unchecked(points: [i8; 24], bar: [u8; 2], off: [u8; 2]) -> Self {
         Position { points, bar, off }
     }
 
@@ -157,6 +235,59 @@ mod tests {
     }
 
     #[test]
+    fn from_raw_accepts_a_full_legal_position() {
+        let mut points = [0i8; 24];
+        points[23] = 2;
+        points[0] = -2;
+        assert!(Position::from_raw(points, [0, 0], [13, 13]).is_ok());
+    }
+
+    #[test]
+    fn from_raw_accepts_a_one_sided_partial_position() {
+        // Only "mine" checkers set, opponent entirely absent (all zero). This is
+        // exactly the shape `og-bearoff`'s one-sided database needs: it only knows
+        // about one side's checkers and has no real opponent to place anywhere.
+        let mut points = [0i8; 24];
+        points[5] = 15; // all 15 on point 6, nothing else on the board
+        assert!(Position::from_raw(points, [0, 0], [0, 0]).is_ok());
+    }
+
+    #[test]
+    fn from_raw_accepts_exactly_15_on_one_side() {
+        let mut points = [0i8; 24];
+        points[5] = 10;
+        assert!(Position::from_raw(points, [2, 0], [3, 0]).is_ok());
+    }
+
+    #[test]
+    fn from_raw_rejects_too_many_mine() {
+        let mut points = [0i8; 24];
+        points[5] = 10;
+        let err = Position::from_raw(points, [3, 0], [3, 0]).unwrap_err();
+        assert_eq!(
+            err,
+            PositionError::TooManyCheckers {
+                mine: true,
+                count: 16
+            }
+        );
+    }
+
+    #[test]
+    fn from_raw_rejects_too_many_theirs() {
+        let mut points = [0i8; 24];
+        points[18] = -10;
+        let err = Position::from_raw(points, [0, 3], [0, 3]).unwrap_err();
+        assert_eq!(
+            err,
+            PositionError::TooManyCheckers {
+                mine: false,
+                count: 16
+            }
+        );
+    }
+
+    #[test]
     fn mirror_of_starting_position_is_itself() {
         // The starting position is symmetric: what's "theirs" at point p is
         // exactly what's "mine" at point 25-p, so mirroring changes nothing.
@@ -168,7 +299,7 @@ mod tests {
         let mut points = [0i8; 24];
         points[0] = 2; // mine, point 1
         points[23] = -3; // theirs, point 24
-        let position = Position::from_raw(points, [1, 2], [4, 5]);
+        let position = Position::from_raw_unchecked(points, [1, 2], [4, 5]);
 
         let mirrored = position.mirror();
 
@@ -191,7 +322,7 @@ mod tests {
         let mut points = [0i8; 24];
         points[4] = 1;
         points[9] = -2;
-        let position = Position::from_raw(points, [1, 0], [3, 2]);
+        let position = Position::from_raw_unchecked(points, [1, 0], [3, 2]);
 
         assert_eq!(position.mirror().mirror(), position);
     }
