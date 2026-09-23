@@ -104,3 +104,23 @@ resulting distribution") — not an exact answer to "what should this side actua
 as an input to the two-sided database and to race equity approximations, not as a source of
 correct checker plays in a real bearoff position. Recorded here so this stays a documented
 limitation instead of an assumption buried in the DP code.
+
+## The Monte Carlo cross-check validates the DP's recursion, not its play-selection rule
+
+`crates/og-bearoff/src/one_sided.rs`'s `monte_carlo_validation` tests simulate many real games and
+compare the empirical rolls-to-finish/rolls-to-first-off means against the DP's exact values. This
+catches bugs in the DP's *recursion and bookkeeping* (pip-count ordering, the `finish`/`first_off`
+convolution, the index-offset convention, etc.) — and it did catch one, in the test harness itself,
+before it landed.
+
+It does **not** independently check `choose_best_ply` (which legal play a given roll should pick).
+That function is called from both sides of the comparison — the DP build and the simulator — by
+design, so both compute the distribution of the *same* policy (see the entry above: that's the
+point, not an oversight). A bug in `choose_best_ply` itself — picking a play that isn't actually
+the expected-rolls-minimizing one — would bias the DP and the simulation identically, and the two
+would still agree with each other while both being wrong.
+
+Only a comparison against GNUbg's own bearoff values (still open, Phase 2's actual "done"
+criterion) can catch a `choose_best_ply` bug. The Monte Carlo tests are evidence the DP correctly
+computes the distribution of *some* consistent policy; they are not evidence that policy is the
+right one.
