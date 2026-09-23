@@ -23,7 +23,24 @@ radi, što se smije, što se ne smije i kako izgleda gotov posao.
   - Neistraženo, uočeno usput: `cargo test -p og-core --lib` (paralelno, debug profil) jednom je pao s exit `0xffffffff` dok je `self_play::tests::phase_distribution_of_the_diff_test_sample` radio usporedno s ostalim testovima. Sumnja da je uzrok duboka rekurzija u `collect_plies` je **opovrgnuta**: dubina je dokazano i izmjereno ograničena na točno 5 (dubleti), neovisno o faktoru grananja — vidi `docs/rules-notes.md`. Vjerojatniji uzrok: taj test je analiza (10 000 self-play partija po do 120 poteza), ne provjera, i pretežak je za jednu nit u debug-modu usporedno s ostalim testovima — sad označen `#[ignore]`. Nalaz i otvorena hipoteza u `docs/backlog.md`.
   - Ostaje do definicije "gotovo" Faze 1 (milijun pozicija × 21 bacanje, identičan skup):
     - sam milijunski run, preko noći, s `OG_DIFF_WORKERS` postavljenim blizu broja jezgri
-- **Poznati dug:** WASM build provjera za `og-core` u CI-ju je dodana (`wasm` job u `.github/workflows/ci.yml`, `cargo build --target wasm32-unknown-unknown -p og-core`, zeleno) — pokupljena prije Faze 2 jer `og-bearoff` uvodi mmap pristup datotekama koji u WASM-u ne radi isto (nema datotečnog sustava u pregledniku); provjeru treba proširiti na `og-bearoff` čim taj crate nastane (vidi `docs/backlog.md`). Uz to, gornji neistraženi pad paralelnih testova.
+    - **Stanje 2026-09-23: run pokrenut, ručno prekinut (Ctrl-C) na ~111 559/1 000 000 (~11.2%), checkpoint netaknut u `target/gnubg_diff_checkpoint/worker_*.txt`, nula neslaganja do prekida.** Nastavak isti poziv (svaki worker čita svoj checkpoint i nastavlja, ne iznova):
+      ```powershell
+      cd C:\Users\leona\Desktop\opengammon
+      $env:OG_DIFF_SAMPLE_SIZE = '1000000'
+      $env:OG_DIFF_WORKERS = '12'
+      Start-Transcript -Path gnubg_million_run.log -Append
+      cargo test -p og-core --release -- --ignored --exact gnubg_diff::random_self_play_positions_match_gnubg --nocapture
+      ```
+      Dok vrti: nijedna druga `cargo` naredba (vidi §3) — uključujući `og-bearoff`-ove GNUbg testove ispod.
+- **Poznati dug:** WASM build provjera za `og-core` u CI-ju je dodana (`wasm` job u `.github/workflows/ci.yml`, `cargo build --target wasm32-unknown-unknown -p og-core`, zeleno) — pokupljena prije Faze 2 jer `og-bearoff` uvodi mmap pristup datotekama koji u WASM-u ne radi isto (nema datotečnog sustava u pregledniku). `og-bearoff` sad ima stvaran kod i lokalno se potvrđeno gradi čisto za `wasm32-unknown-unknown` (provjereno više puta tijekom sesije 2026-09-23), ali CI job to još ne provjerava — `wasm` job u `ci.yml` i dalje gradi samo `og-core`. Proširiti na `og-bearoff` ostaje otvoreno. Uz to, gornji neistraženi pad paralelnih testova.
+
+- **Faza 2 (svjesno odstupanje od "faza po faza", dogovoreno s korisnikom 2026-09-23 — Faza 1 nije zatvorena):**
+  - `crates/og-bearoff/src/combinatorial.rs`: generičko `rank`/`unrank` (const generic po broju točaka) za kodiranje rasporeda kamena u gust indeks; `count()` sam računa binomni koeficijent. Iscrpno testirano za pravi jednostrani oblik (6 točaka/15 kamena → 54 264 pozicije).
+  - `og-core::Position::from_raw` promijenjen iz `#[cfg(test)]`-only nevalidirajućeg u javni, validirajući konstruktor (`Result<Self, PositionError>`, provjerava najviše 15 kamena po igraču, dopušta djelomične/jednostrane pozicije). Stari nevalidirajući oblik preživljava kao `from_raw_unchecked`, `pub(crate)`, `#[cfg(test)]`.
+  - `crates/og-bearoff/src/one_sided.rs`: DP unatrag za jednostranu bazu. Po poziciji: `finish` (bacanja do zadnjeg kamena) i `first_off` (do prvog, za gammon) — **dva odvojena pravila odabira poteza**, ne jedno (otkriveno usporedbom s GNUbg-om, vidi `docs/rules-notes.md`). `first_off` se sprema samo za pozicije s `off == 0` (15 504 od 54 264) — GNUbg-ova "saving gammon" statistika je retroaktivna (trivijalna čim je bilo koji kamen već iznesen), pa nema smisla pamtiti je drugdje.
+  - Validacija: iscrpni testovi (zbroj razdiobe = 1 za sve pozicije), Monte Carlo unakrsna provjera (dvije odvojene simulacije, jedna po pravilu), pa GNUbg usporedba — 10 ručno odabranih pozicija, zatim 300 nasumičnih, obje čiste (najveće odstupanje ~0.012 postotnih bodova, obično zaokruživanje). Iscrpna GNUbg usporedba na kvantiziranim vrijednostima (svih 54 264 pozicije, ~55 min) je napisana (`gnubg_diff.rs::exhaustive_quantized_comparison_matches_gnubg`, `#[ignore]`) ali **nije još pokrenuta do kraja** — čeka korisnika da je pokrene ručno (isti razlog kao milijunski run: dugi lokalni run).
+  - `crates/og-bearoff/src/quantize.rs`: kvantizacija `f64` → `u16` (×65535) za kompaktan zapis. Zbroj ostaje točno 65535 u zapisu (zadnja vrijednost = ostatak, ne zaokružena zasebno; preljev iznad 65535 od nezavisnog zaokruživanja rješava se oduzimanjem od najveće vrijednosti). Iscrpno provjereno na cijeloj tablici, najveća greška ~6×10⁻⁵.
+  - **Ostaje: pokrenuti iscrpnu GNUbg usporedbu do kraja, pa mmap pristup datotekama.** Zatim natrag na Fazu 1 (milijunski run) prije nego se Faza 2 smatra "trenutnom".
 
 ---
 
