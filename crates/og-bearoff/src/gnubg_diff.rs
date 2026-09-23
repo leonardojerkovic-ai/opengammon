@@ -21,6 +21,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 
+use crate::combinatorial;
 use crate::one_sided::{self, Entry, POINTS};
 
 const READY_MARKER: &str = "===OG_BEAROFF_HARNESS_READY===";
@@ -244,6 +245,43 @@ fn compare_position(
     }
 }
 
+/// Same as [`compare_position`], but compares the *quantized* (`quantize::quantize`
+/// then `dequantize`) values instead of the raw `f64` table — the values `og-bearoff`
+/// actually stores and would serve from a lookup, not an intermediate the DP happens to
+/// compute along the way. Quantization error is tiny (see `quantize.rs`'s own
+/// exhaustive test) but not zero, so this can legitimately differ slightly from
+/// `compare_position`'s result on the same position.
+fn compare_position_quantized(
+    checkers: [u8; POINTS],
+    table: &[Entry],
+    session: &mut BearoffIndexSession,
+) -> Comparison {
+    let ours = one_sided::lookup(table, checkers);
+    let gnubg_index = session.index(checkers);
+    let dump = dump_bearoff(gnubg_index);
+
+    let total: u32 = checkers.iter().map(|&c| c as u32).sum();
+    let off_zero = total == one_sided::MAX_CHECKERS as u32;
+
+    let quantized_finish = crate::quantize::dequantize(&crate::quantize::quantize(&ours.finish));
+
+    Comparison {
+        checkers,
+        finish_deviation_pct: max_deviation_pct(&quantized_finish, &dump.finish_pct, 0),
+        first_off_deviation_pct: if off_zero {
+            let quantized_first_off =
+                crate::quantize::dequantize(&crate::quantize::quantize(&ours.first_off));
+            Some(max_deviation_pct(
+                &quantized_first_off,
+                &dump.first_off_pct,
+                1,
+            ))
+        } else {
+            None
+        },
+    }
+}
+
 /// A tolerance for GNUbg's own 3-decimal-percentage display rounding (max 0.0005 per
 /// value) plus a margin for small accumulated float differences near a distribution's
 /// peak, where many summed roll/recursion paths converge (observed up to ~0.012 on a
@@ -366,6 +404,73 @@ mod tests {
 
         eprintln!(
             "{SAMPLE_SIZE} random positions ({off_zero_checked} with off == 0 checked for \
+             first_off): largest finish deviation {worst_finish} pct points, largest \
+             first_off deviation {worst_first_off} pct points"
+        );
+    }
+
+    /// Exhaustive, not sampled: every one of the 54,264 one-sided positions, comparing
+    /// the *quantized* values (`compare_position_quantized`) against GNUbg — Phase 2's
+    /// actual "done" criterion is a match against GNUbg, and the values that need to
+    /// match are the ones `og-bearoff` would really serve, not an f64 intermediate.
+    /// Slow (~55 minutes sequential over one `bearoffdump.exe` call per position, per
+    /// CLAUDE.md rules-notes.md's discussion) — run explicitly, not part of the regular
+    /// `-- --ignored` sweep of this module's other tests.
+    #[test]
+    #[ignore = "requires GNUBG_PATH; slow, ~55 minutes -- run explicitly"]
+    fn exhaustive_quantized_comparison_matches_gnubg() {
+        let table = one_sided::compute_table();
+        let mut session = BearoffIndexSession::spawn();
+
+        let total_positions = table.len();
+        let mut worst_finish = 0.0f64;
+        let mut worst_first_off = 0.0f64;
+        let mut off_zero_checked = 0u32;
+
+        for index in 0..total_positions {
+            let checkers: [u8; POINTS] = combinatorial::unrank(one_sided::MAX_CHECKERS, index);
+            if checkers == [0; POINTS] {
+                // bearoffdump.exe's `-n 0` is rejected as "index not provided" (a CLI
+                // quirk in the tool itself, confirmed manually). The only position this
+                // ever affects is all-off, where finish == [1.0] is a structural base
+                // case anyway (already checked exhaustively in one_sided.rs), not
+                // something a GNUbg comparison would add confidence to. Skipped, not
+                // silently passed: this is the one index this test cannot reach.
+                continue;
+            }
+            let result = compare_position_quantized(checkers, &table, &mut session);
+
+            worst_finish = worst_finish.max(result.finish_deviation_pct);
+            assert!(
+                result.finish_deviation_pct < TOLERANCE_PCT,
+                "finish mismatch at index {index} {:?}: {} pct points",
+                result.checkers,
+                result.finish_deviation_pct
+            );
+
+            if let Some(d) = result.first_off_deviation_pct {
+                off_zero_checked += 1;
+                worst_first_off = worst_first_off.max(d);
+                assert!(
+                    d < TOLERANCE_PCT,
+                    "first_off mismatch at index {index} {:?}: {} pct points",
+                    result.checkers,
+                    d
+                );
+            }
+
+            if index % 2000 == 0 {
+                eprintln!(
+                    "exhaustive_quantized_comparison_matches_gnubg: {index}/{total_positions} \
+                     ({off_zero_checked} off==0 checked), worst so far: finish \
+                     {worst_finish} pct points, first_off {worst_first_off} pct points"
+                );
+            }
+        }
+
+        assert_eq!(off_zero_checked, 15_504);
+        eprintln!(
+            "all {total_positions} positions ({off_zero_checked} with off == 0 checked for \
              first_off): largest finish deviation {worst_finish} pct points, largest \
              first_off deviation {worst_first_off} pct points"
         );
