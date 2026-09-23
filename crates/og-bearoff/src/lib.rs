@@ -5,3 +5,6 @@
 
 pub mod combinatorial;
 pub mod one_sided;
+
+#[cfg(test)]
+mod gnubg_diff;

@@ -178,6 +178,36 @@ Two consequences:
   all, matched or not. `finish` has no such restriction — it's a real, comparable quantity at every
   `off` level.
 
+## GNUbg comparison scaled from one position to a sample: 10 handpicked, then 300 random
+
+`crates/og-bearoff/src/gnubg_diff.rs` (mirrors `og-core`'s `gnubg_diff.rs`/`gnubg_harness.py`
+pattern): `tests/gnubg_bearoff_harness.py` gets GNUbg's own bearoff index for a checker placement
+via `gnubg.positionbearoff()` in one long-lived `gnubg-cli` session (positionbearoff is cheap —
+no board/dice setup needed, so this easily keeps up with hundreds of queries); `bearoffdump.exe` is
+then invoked once per index to get GNUbg's actual distribution as text.
+
+**10 handpicked positions** (few/many checkers, stacked/spread, close/far, several with checkers
+already off): all matched. Largest `finish` deviation 0.0034 percentage points; largest `first_off`
+deviation (checked only at the `off == 0` positions in the set) 0.0006 points.
+
+**300 random positions** (fixed seed `0xb0ad1ce`; uniform random total 1..=15, checkers placed on
+uniform random points — naturally covers the same few/many/stacked/spread/near/far range without
+hand-tuning): all matched. Largest `finish` deviation 0.0118 percentage points (on a position with
+16-roll support, where more summed recursion paths converge near the distribution's peak — plain
+floating-point/display-rounding accumulation, not a policy bug: compare to the ~4700-point gap the
+real first_off bug produced). 17 of the 300 had `off == 0`; largest `first_off` deviation among
+those was ~3e-14 points, i.e. exact up to floating-point noise. Tolerance settled at 0.05 percentage
+points — comfortably above the largest observed legitimate rounding gap, an order of magnitude
+below what an actual mismatch looks like.
+
+One implementation bug found and fixed *in the comparison code*, not the DP: `first_off[i]` means
+"`i + 1` rolls" in `og-bearoff`'s own convention, but GNUbg's dump rows are 0-indexed directly by
+roll count, so the two needed a one-row shift when comparing — missing it initially produced a
+~47-point "mismatch" that was really just everything compared one slot off.
+
+The 300-position run is the largest so far; the full Phase 2 "done" run (the actual sample size
+Phase 2 commits to) is still open.
+
 ## The Monte Carlo cross-check validates the DP's recursion, not its play-selection rule
 
 `crates/og-bearoff/src/one_sided.rs`'s `monte_carlo_validation` tests simulate many real games and
