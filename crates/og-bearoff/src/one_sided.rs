@@ -300,6 +300,58 @@ fn compute_entry(
     Entry { finish, first_off }
 }
 
+/// Positions where at least one of the 21 rolls has two or more legal plies whose
+/// `finish_score` differ by less than `threshold` — a near-tie our arbitrary
+/// lowest-rank-index tie-break could plausibly resolve differently than GNUbg's own
+/// construction does. `pub(crate)` for `gnubg_diff.rs`'s exhaustive comparison, which
+/// uses this to tell a position's *own* near-tie apart from a deviation merely
+/// inherited through the DP from some ancestor's near-tie. See `docs/rules-notes.md`.
+#[cfg(test)]
+pub(crate) fn positions_with_near_tied_finish_choice(
+    table: &[Entry],
+    threshold: f64,
+) -> std::collections::HashSet<usize> {
+    let entries: Vec<Option<Entry>> = table.iter().cloned().map(Some).collect();
+    let rolls = all_rolls_with_weights();
+    let mut result = std::collections::HashSet::new();
+
+    for (index, _) in table.iter().enumerate() {
+        let checkers: [u8; POINTS] = combinatorial::unrank(MAX_CHECKERS, index);
+        let total_checkers: u32 = checkers.iter().map(|&c| c as u32).sum();
+        if total_checkers == 0 {
+            continue;
+        }
+        let position = position_for(checkers);
+
+        for &(roll, _weight) in &rolls {
+            let plies = position.generate_moves(roll);
+            if plies.len() < 2 {
+                continue;
+            }
+            let mut scores: Vec<f64> = plies
+                .iter()
+                .map(|ply| {
+                    let resulting = position.apply(ply);
+                    let mut rc = [0u8; POINTS];
+                    for (i, slot) in rc.iter_mut().enumerate() {
+                        *slot = resulting.point(i) as u8;
+                    }
+                    let idx = combinatorial::rank(MAX_CHECKERS, rc);
+                    let bore_off = rc.iter().map(|&c| c as u32).sum::<u32>() < total_checkers;
+                    finish_score(&entries, idx, bore_off)
+                })
+                .collect();
+            scores.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            if scores[1] - scores[0] < threshold {
+                result.insert(index);
+                break;
+            }
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::OnceLock;
