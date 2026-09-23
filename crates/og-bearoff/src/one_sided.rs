@@ -23,8 +23,16 @@ pub struct Entry {
     pub finish: Vec<f64>,
     /// `first_off[i]` = P(exactly `i + 1` rolls left to bear off the *first* checker),
     /// for gammon calculations (bearing off the first checker always takes at least one
-    /// roll, so there's no index for "zero rolls" to waste). Empty for the terminal
-    /// position, which has no future "first bear-off" event to wait for.
+    /// roll, so there's no index for "zero rolls" to waste).
+    ///
+    /// **Empty for every position except one with all `MAX_CHECKERS` still on board
+    /// (`off == 0`)**, not just the terminal one — GNUbg's own "saving gammon"
+    /// statistic is retroactive, not prospective: it asks whether a checker has
+    /// *already* come off, which becomes trivially true (100% at 0 rolls, no further
+    /// computation needed) the instant `off > 0`. Storing that constant for 38,760 of
+    /// the 54,264 positions (everywhere `off > 0`) would be pure waste — see
+    /// `docs/rules-notes.md`. Callers that need a value for an `off > 0` position
+    /// already know it without a lookup: "already saved".
     pub first_off: Vec<f64>,
 }
 
@@ -210,12 +218,22 @@ fn compute_entry(
 
     let position = position_for(checkers);
 
-    // finish and first_off are optimized separately, under two different policies
-    // (see first_off_score's doc): a roll's best play for racing speed and its best
-    // play for gammon-saving speed can be different plays. Every child referenced by
-    // either has strictly fewer pips than this position, so it's already in `entries`.
+    // GNUbg's own "saving gammon" statistic is retroactive, not prospective: it asks
+    // whether a checker has *already* come off (true the instant `off > 0`), not how
+    // many more rolls until the next one. So first_off only carries information for
+    // off == 0 positions (all MAX_CHECKERS still on board, 15,504 of the 54,264 total
+    // — see docs/rules-notes.md); everywhere else the answer is the known constant
+    // "already saved" and isn't computed or stored.
+    let needs_first_off = total_checkers == MAX_CHECKERS as u32;
+
+    // finish and first_off (when needed) are optimized separately, under two
+    // different policies (see first_off_score's doc): a roll's best play for racing
+    // speed and its best play for gammon-saving speed can be different plays. Every
+    // child referenced by either has strictly fewer pips than this position, so it's
+    // already in `entries`.
     let mut finish_chosen: Vec<usize> = Vec::with_capacity(rolls.len());
-    let mut first_off_chosen: Vec<(usize, bool)> = Vec::with_capacity(rolls.len());
+    let mut first_off_chosen: Vec<(usize, bool)> =
+        Vec::with_capacity(if needs_first_off { rolls.len() } else { 0 });
     for &(roll, _weight) in rolls {
         let plies = position.generate_moves(roll);
         assert!(
@@ -229,14 +247,16 @@ fn compute_entry(
             });
         finish_chosen.push(combinatorial::rank(MAX_CHECKERS, finish_checkers));
 
-        let (first_off_checkers, bore_off) =
-            choose_best_ply(&position, total_checkers, &plies, |index, bore_off| {
-                first_off_score(entries, index, bore_off)
-            });
-        first_off_chosen.push((
-            combinatorial::rank(MAX_CHECKERS, first_off_checkers),
-            bore_off,
-        ));
+        if needs_first_off {
+            let (first_off_checkers, bore_off) =
+                choose_best_ply(&position, total_checkers, &plies, |index, bore_off| {
+                    first_off_score(entries, index, bore_off)
+                });
+            first_off_chosen.push((
+                combinatorial::rank(MAX_CHECKERS, first_off_checkers),
+                bore_off,
+            ));
+        }
     }
 
     let mut finish_len = 1;
@@ -251,26 +271,31 @@ fn compute_entry(
         }
     }
 
-    let mut first_off_len = 0;
-    for &(child_index, bore_off) in &first_off_chosen {
-        let child = entries[child_index].as_ref().unwrap();
-        if bore_off {
-            first_off_len = first_off_len.max(1);
-        } else if !child.first_off.is_empty() {
-            first_off_len = first_off_len.max(child.first_off.len() + 1);
-        }
-    }
-    let mut first_off = vec![0.0f64; first_off_len];
-    for (&(_, weight), &(child_index, bore_off)) in rolls.iter().zip(first_off_chosen.iter()) {
-        let child = entries[child_index].as_ref().unwrap();
-        if bore_off {
-            first_off[0] += weight;
-        } else {
-            for (r, &p) in child.first_off.iter().enumerate() {
-                first_off[r + 1] += weight * p;
+    let first_off = if !needs_first_off {
+        Vec::new()
+    } else {
+        let mut first_off_len = 0;
+        for &(child_index, bore_off) in &first_off_chosen {
+            if bore_off {
+                first_off_len = first_off_len.max(1);
+            } else {
+                let child = entries[child_index].as_ref().unwrap();
+                first_off_len = first_off_len.max(child.first_off.len() + 1);
             }
         }
-    }
+        let mut first_off = vec![0.0f64; first_off_len];
+        for (&(_, weight), &(child_index, bore_off)) in rolls.iter().zip(first_off_chosen.iter()) {
+            if bore_off {
+                first_off[0] += weight;
+            } else {
+                let child = entries[child_index].as_ref().unwrap();
+                for (r, &p) in child.first_off.iter().enumerate() {
+                    first_off[r + 1] += weight * p;
+                }
+            }
+        }
+        first_off
+    };
 
     Entry { finish, first_off }
 }
@@ -331,18 +356,22 @@ mod tests {
 
     #[test]
     fn single_checker_on_point_one_bears_off_in_exactly_one_roll() {
+        // Only 1 of 15 checkers on the board (14 already off): first_off is
+        // deliberately not stored here (GNUbg's "saving gammon" is already trivially
+        // true the instant off > 0) even though finish is a real computation.
         let entry = lookup(table(), checkers(&[(1, 1)]));
         assert_close_vec(&entry.finish, &[0.0, 1.0], "finish");
-        assert_close_vec(&entry.first_off, &[1.0], "first_off");
+        assert!(entry.first_off.is_empty());
     }
 
     #[test]
     fn two_checkers_on_point_one_both_bear_off_in_exactly_one_roll() {
         // Any roll has two dice, and a checker on point 1 always bears off with any
         // single die value, so both checkers always clear in the very first roll.
+        // Still off > 0 (13 already off), so first_off is empty, same as above.
         let entry = lookup(table(), checkers(&[(1, 2)]));
         assert_close_vec(&entry.finish, &[0.0, 1.0], "finish");
-        assert_close_vec(&entry.first_off, &[1.0], "first_off");
+        assert!(entry.first_off.is_empty());
     }
 
     #[test]
@@ -354,16 +383,55 @@ mod tests {
     }
 
     #[test]
-    fn first_off_distribution_sums_to_one_for_every_non_terminal_position() {
+    fn first_off_is_stored_only_for_positions_with_all_checkers_still_on_board() {
+        // 15,504 = C(20, 5): the number of ways to place exactly 15 (not "at most 15")
+        // checkers on 6 points — see docs/rules-notes.md for why only these positions
+        // carry a real first_off distribution.
+        const EXPECTED_OFF_ZERO_COUNT: usize = 15_504;
+        let mut off_zero_count = 0;
+
         for (index, entry) in table().iter().enumerate() {
-            if entry.finish == [1.0] {
-                continue; // terminal position: first_off is deliberately empty
+            let checkers: [u8; POINTS] = combinatorial::unrank(MAX_CHECKERS, index);
+            let total: u32 = checkers.iter().map(|&c| c as u32).sum();
+
+            if total == MAX_CHECKERS as u32 {
+                off_zero_count += 1;
+                let sum: f64 = entry.first_off.iter().sum();
+                assert_close(
+                    sum,
+                    1.0,
+                    &format!("first_off distribution at index {index}"),
+                );
+            } else {
+                assert!(
+                    entry.first_off.is_empty(),
+                    "index {index} (total {total}) should have empty first_off, got {:?}",
+                    entry.first_off
+                );
             }
-            let sum: f64 = entry.first_off.iter().sum();
-            assert_close(
-                sum,
-                1.0,
-                &format!("first_off distribution at index {index}"),
+        }
+
+        assert_eq!(off_zero_count, EXPECTED_OFF_ZERO_COUNT);
+    }
+
+    #[test]
+    fn worst_position_first_off_matches_gnubg() {
+        // Regression test for the two-policy fix: confirmed against GNUbg's own
+        // gnubg_os0.bd via bearoffdump.exe on 2026-09-23 (see docs/rules-notes.md).
+        // The expected values are only known to 6 decimals (read off our own printed
+        // output, already checked against GNUbg's 3-decimal display), so this uses a
+        // looser tolerance than assert_close_vec's 1e-9 — tight enough to catch a
+        // regression in the two-policy logic, loose enough not to fail on the last
+        // couple of digits of a value nobody claimed was exact.
+        let entry = lookup(table(), checkers(&[(6, 15)]));
+        let expected = [
+            0.472222, 0.449846, 0.068651, 0.008223, 0.000974, 0.000081, 0.000003, 0.0,
+        ];
+        assert_eq!(entry.first_off.len(), expected.len());
+        for (i, (&actual, &expected)) in entry.first_off.iter().zip(&expected).enumerate() {
+            assert!(
+                (actual - expected).abs() < 1e-5,
+                "first_off[{i}]: {actual} != {expected}"
             );
         }
     }

@@ -153,6 +153,31 @@ all matching GNUbg to the precision it displays.
 No need to read `makebearoff.c` for this — the hypothesis was testable, and confirmed, purely by
 comparing DP output to GNUbg's own dump.
 
+## GNUbg's "saving gammon" statistic is retroactive, not prospective
+
+Found while trying to extend the GNUbg comparison from one position to several (index 500 in
+`gnubg_os0.bd`: 3 checkers on point 1, 2 on point 3, 1 on point 5 — 6 remaining, 9 already off).
+Its "Saving gammon" row showed 100% at 0 rolls, mean 0.000, std dev 0.000 — trivial, despite the
+position clearly not having borne off anything *yet* (its own "Bearing off" row is 0% until roll 2).
+
+The statistic isn't asking "how many more rolls until this position's next bear-off" — it's asking
+"has a checker already come off, ever, on the way to this position." That's the right question for
+gammon purposes (a gammon is avoided the moment any checker is borne off, however long ago), and
+it's trivially, retroactively true the instant `off > 0`: nothing left to compute. Confirmed on
+this second position, not assumed: mean/std dev of exactly 0 is only consistent with a point mass
+at 0 rolls, i.e. "already saved."
+
+Two consequences:
+- `og_bearoff::one_sided::Entry::first_off` now matches this: empty (meaning "trivially saved") for
+  every position with `off > 0`, real data only for the 15,504 positions with all 15 checkers still
+  on board. Verified that count against `combinatorial::count`, not taken on faith: `C(20, 5)
+  = 54264 - C(20, 6) = 54264 - 38760 = 15504`, matching `og-bearoff`'s own exhaustive count.
+- **The GNUbg comparison for `first_off` is only meaningful on `off == 0` positions.** Every
+  position sampled for that statistic (now or in the eventual full-sample run) must have all 15
+  checkers on board; a position with `off > 0` has no non-trivial GNUbg value to compare against at
+  all, matched or not. `finish` has no such restriction — it's a real, comparable quantity at every
+  `off` level.
+
 ## The Monte Carlo cross-check validates the DP's recursion, not its play-selection rule
 
 `crates/og-bearoff/src/one_sided.rs`'s `monte_carlo_validation` tests simulate many real games and
