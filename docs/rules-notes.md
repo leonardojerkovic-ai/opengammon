@@ -86,41 +86,91 @@ unrelated.
 ## One-sided bearoff database: "minimize expected own rolls" is a known limitation, not optimal play
 
 The Phase 2 one-sided database (`og-bearoff`) is built by picking, for each position and each of
-the 21 rolls, the legal play whose resulting position has the lowest expected number of rolls to
-bear off all of *that side's own* checkers. Both stored distributions per position (rolls to bear
-off the last checker, and rolls to bear off the first checker, for gammon calculations) are
-derived from that same single policy, walked recursively.
+the 21 rolls, the legal play whose resulting position has the lowest expected number of rolls
+under a given objective. `finish` and `first_off` each have their **own** objective and are
+optimized separately, not from one shared policy — see the next entry for why.
 
-This is **not** the same thing as globally optimal play. Real bearoff decisions sometimes trade
-raw racing speed for match-relevant considerations that depend on the opponent's position — e.g.
-playing safer (accepting a slightly worse expected-rolls figure) when comfortably ahead and gammon
-isn't in reach, or playing to maximize variance/gammon chances when behind. Those trade-offs are
-only resolvable by a database that sees both sides jointly, which is exactly what the two-sided
-database (later in Phase 2) is for.
+This is **not** the same thing as globally optimal play, for either statistic. Real bearoff
+decisions sometimes trade raw racing speed for match-relevant considerations that depend on the
+opponent's position — e.g. playing safer when comfortably ahead and gammon isn't in reach, or
+playing to maximize variance/gammon chances when behind. Those trade-offs are only resolvable by a
+database that sees both sides jointly, which is exactly what the two-sided database (later in
+Phase 2) is for.
 
 So: the one-sided database's values are a well-defined, exact answer to a *specific*, narrower
-question ("if this side only ever tries to minimize its own expected time to bear off, what's the
-resulting distribution") — not an exact answer to "what should this side actually play." Treat it
-as an input to the two-sided database and to race equity approximations, not as a source of
-correct checker plays in a real bearoff position. Recorded here so this stays a documented
-limitation instead of an assumption buried in the DP code.
+question per statistic ("if this side only ever tries to minimize its own expected time to bear
+off everything, what's the resulting distribution" for `finish`; "...to get a checker off as soon
+as possible" for `first_off`) — not an exact answer to "what should this side actually play."
+Treat it as an input to the two-sided database and to race/gammon equity approximations, not as a
+source of correct checker plays in a real bearoff position. Recorded here so this stays a
+documented limitation instead of an assumption buried in the DP code.
+
+## `finish` and `first_off` need two different play-selection policies, confirmed against GNUbg
+
+Followed the Phase 1 methodology for the GNUbg comparison: one position first, not a sample.
+Chosen position: the worst one-sided position, 15 checkers on point 6 — deliberately not the
+easiest case, to stress-test rather than rubber-stamp.
+
+**How the comparison was done**, since this matters for anyone repeating it: GNUbg's Python layer
+(the same one `gnubg_harness.py` already uses) exposes `gnubg.positionbearoff(side)`, which returns
+GNUbg's own bearoff index for a one-sided checker placement — confirmed working, no binary parsing
+needed for that part. GNUbg's Python layer does **not** expose a function for the actual
+distribution values (checked the full `dir(gnubg)`, not just the manual's function list). For
+those, `bearoffdump.exe` — a CLI tool shipped with the GNUbg install, invoked as an external
+process like `gnubg-cli` — dumps a position's full rolls-needed breakdown (mean, std dev, and the
+per-roll-count percentages) in human-readable text, reading GNUbg's own `gnubg_os0.bd`. No GNUbg
+source was read or copied for this; both tools are used exactly as GNUbg ships them.
+
+**Index conventions differ, as expected.** GNUbg puts the all-off position at index 0 and the
+worst position (15 on point 6) at index 54263 (the *last* index); `combinatorial::rank` puts
+all-off at 0 too, but the worst position at index 15 (near the *start*) — point 1 is
+`combinatorial`'s most-significant digit, point 6 is apparently GNUbg's. Comparing must go through
+the checker configuration, never the raw index number.
+
+**`finish` matched almost exactly** on the first try: mean 12.266 both sides, per-roll-count
+percentages identical to 3 decimals across the whole range (rolls 5 through 18). Strong evidence
+the DP's core recursion (pip-count ordering, the convolution, `finish_score`) is correct.
+
+**`first_off` did not match** under the original design (one shared policy, `finish_score` used
+for both statistics): DP mean 1.700 vs GNUbg's 1.616, first-roll probability 16/36 vs GNUbg's
+17/36. Traced to a specific roll, not a guess: from 15-on-point-6, rolling double 2 has 4 legal
+plies. The `finish_score`-optimal one *doesn't* bear off (spreading to 4-on-point-4/11-on-point-6
+has mean 11.1537, strictly better than bearing one off to 1-on-point-4/13-on-point-6/1-off at
+11.1942 — stacking 13 deep is worse than spreading, even net of one fewer checker on the board).
+GNUbg's database bears off here anyway.
+
+That pointed at a design hypothesis: GNUbg computes `finish` and `first_off` under **two different
+objectives**, not one. `first_off` isn't "what happens on the way to the fastest finish" — it's a
+separate question, "how fast can this side get *a* checker off," which is what actually matters
+for saving a gammon (the trailing side playing to avoid a gammon wants a checker off now, not the
+overall-fastest race). Implemented as `first_off_score` in `one_sided.rs`: bearing off scores 1
+unconditionally; not bearing off scores `1 + child's own first_off mean`, recursively — which
+reduces to "bear off if any play can, otherwise minimize the child's first_off mean." Re-ran the
+DP with `finish` and `first_off` each choosing their own best play per roll (not necessarily the
+same child): **exact match** — 47.222%, 44.985%, 6.865%, 0.822% for rolls 1 through 4, mean 1.616,
+all matching GNUbg to the precision it displays.
+
+No need to read `makebearoff.c` for this — the hypothesis was testable, and confirmed, purely by
+comparing DP output to GNUbg's own dump.
 
 ## The Monte Carlo cross-check validates the DP's recursion, not its play-selection rule
 
 `crates/og-bearoff/src/one_sided.rs`'s `monte_carlo_validation` tests simulate many real games and
-compare the empirical rolls-to-finish/rolls-to-first-off means against the DP's exact values. This
-catches bugs in the DP's *recursion and bookkeeping* (pip-count ordering, the `finish`/`first_off`
-convolution, the index-offset convention, etc.) — and it did catch one, in the test harness itself,
-before it landed.
+compare empirical means against the DP's exact values — separately for `finish` (under
+`finish_score`) and `first_off` (under `first_off_score`), via two independent playouts of the same
+starting position, since a single played-out game can only follow one policy's choices at a time.
+This catches bugs in the DP's *recursion and bookkeeping* (pip-count ordering, the convolution, the
+index-offset convention, etc.) — and it did catch one, in the test harness itself, before it landed.
 
-It does **not** independently check `choose_best_ply` (which legal play a given roll should pick).
-That function is called from both sides of the comparison — the DP build and the simulator — by
-design, so both compute the distribution of the *same* policy (see the entry above: that's the
-point, not an oversight). A bug in `choose_best_ply` itself — picking a play that isn't actually
-the expected-rolls-minimizing one — would bias the DP and the simulation identically, and the two
-would still agree with each other while both being wrong.
+It does **not** independently check `choose_best_ply` or the `finish_score`/`first_off_score`
+scoring functions (which legal play a given roll should pick, and by what criterion). Those are
+called from both sides of every comparison — the DP build and the simulator — by design, so both
+sides compute the distribution of the *same* policy (see the two entries above: that's the point,
+not an oversight). A bug in a scoring function itself — one that doesn't actually implement the
+intended objective — would bias the DP and the simulation identically, and the two would still
+agree with each other while both being wrong.
 
-Only a comparison against GNUbg's own bearoff values (still open, Phase 2's actual "done"
-criterion) can catch a `choose_best_ply` bug. The Monte Carlo tests are evidence the DP correctly
-computes the distribution of *some* consistent policy; they are not evidence that policy is the
-right one.
+Only a comparison against GNUbg's own bearoff values (as above) can catch that class of bug — and
+it did, for `first_off`. The Monte Carlo tests are evidence the DP correctly computes the
+distribution of *some* consistent policy; they are not evidence that policy is the right one. Keep
+running both checks; neither is a substitute for the other.
