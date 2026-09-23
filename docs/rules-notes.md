@@ -82,3 +82,25 @@ Conclusion: `collect_plies`'s recursion is not a stack-depth risk, on WASM or an
 iterative rewrite with an explicit stack is not warranted on this basis. See `docs/backlog.md`
 for the parallel-test-run crash that prompted this question — the two turned out to be
 unrelated.
+
+## One-sided bearoff database: "minimize expected own rolls" is a known limitation, not optimal play
+
+The Phase 2 one-sided database (`og-bearoff`) is built by picking, for each position and each of
+the 21 rolls, the legal play whose resulting position has the lowest expected number of rolls to
+bear off all of *that side's own* checkers. Both stored distributions per position (rolls to bear
+off the last checker, and rolls to bear off the first checker, for gammon calculations) are
+derived from that same single policy, walked recursively.
+
+This is **not** the same thing as globally optimal play. Real bearoff decisions sometimes trade
+raw racing speed for match-relevant considerations that depend on the opponent's position — e.g.
+playing safer (accepting a slightly worse expected-rolls figure) when comfortably ahead and gammon
+isn't in reach, or playing to maximize variance/gammon chances when behind. Those trade-offs are
+only resolvable by a database that sees both sides jointly, which is exactly what the two-sided
+database (later in Phase 2) is for.
+
+So: the one-sided database's values are a well-defined, exact answer to a *specific*, narrower
+question ("if this side only ever tries to minimize its own expected time to bear off, what's the
+resulting distribution") — not an exact answer to "what should this side actually play." Treat it
+as an input to the two-sided database and to race equity approximations, not as a source of
+correct checker plays in a real bearoff position. Recorded here so this stays a documented
+limitation instead of an assumption buried in the DP code.
