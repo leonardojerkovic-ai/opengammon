@@ -4,3 +4,4 @@
 //! cleanly to WASM. See `OPENGAMMON.md`, Phase 2.
 
 pub mod combinatorial;
+pub mod one_sided;
