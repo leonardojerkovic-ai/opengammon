@@ -296,3 +296,41 @@ explained, all small, all traceable to the same root cause as the (already-docum
 `finish`'s policy isn't provably unique when candidate plies are this close. Revisit only if a later
 phase's rollout results turn out to be sensitive to sub-0.3-percentage-point bearoff distribution
 shape at these specific positions — not expected, but not asserted as impossible either.
+
+## Disk format: byte-decoding is platform-agnostic, only the byte *source* is feature-gated
+
+`crates/og-bearoff/src/disk.rs`. The risk flagged before writing any of this: `memmap2` cannot be an
+unconditional dependency, because `og-bearoff` must keep building for `wasm32-unknown-unknown` (no
+filesystem in a browser), and this is exactly the WASM check added to CI *before* Phase 2 started for
+precisely this reason (see CLAUDE.md §0's Phase 1 "known debt" entry).
+
+Resolved by splitting the concern in two: [`BearoffData`] parses and looks values up in a plain
+`&[u8]` — no I/O, no `unsafe`, no platform dependency, compiles and runs identically on any target,
+`wasm32-unknown-unknown` included. Only *obtaining* that `&[u8]` is platform-specific, and that part
+lives behind the `mmap` Cargo feature (not a default feature): `disk::native::MappedBearoffFile`
+wraps `memmap2::Mmap`, gated `#[cfg(feature = "mmap")]`, so a plain `cargo build --target
+wasm32-unknown-unknown -p og-bearoff` never pulls `memmap2` in at all — verified, not assumed: built
+clean both with and without `--features mmap` on native, and clean for wasm32 with default features.
+A WASM caller (`og-wasm`, when it exists) would fetch the file's bytes however the browser provides
+them and hand them straight to `BearoffData::parse` — same bytes, same format, no code in this crate
+needs to know the difference.
+
+Two other decisions fixed in the format itself rather than left as code-level assumptions: the header
+carries `max_finish_len`/`max_first_off_len` as *measured* fields the writer fills in from the actual
+table (currently 31 and 10), not constants a reader has to trust match — a future table with a longer
+tail changes the header, not a silent misread. And every multi-byte integer is explicitly
+little-endian (`to_le_bytes`/`from_le_bytes` throughout, stated in the format doc comment), not
+whatever the host platform happens to default to.
+
+Fixed-stride records (every position zero-padded to the header's max length) were kept over a
+separate offset index: `rank * max_finish_len * 2` is the whole address computation, no lookup table
+to also load and keep correct. The `first_off` section's dense sub-index reuses
+`combinatorial::rank`/`unrank` over `points - 1` points rather than a second indexing scheme — the
+same trick noted when `first_off` storage was first restricted to `off == 0` positions: the last
+point's count is always the remainder of the others, so a `points - 1`-point "at most `max_checkers`"
+rank is already a dense index over exactly the "sums to `max_checkers`" subset.
+
+Round-tripped exhaustively (54,264 `finish` records, all 15,504 `first_off` ones) against the
+in-memory table, values identical after quantize/dequantize on both sides. Format errors (bad magic,
+wrong version, wrong shape, truncated data) are rejected with a specific reason before any lookup
+would trust an offset into the bytes, each covered by its own test.

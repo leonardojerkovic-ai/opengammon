@@ -8,6 +8,14 @@ repository.workspace = true
 
 [dependencies]
 og-core = { path = "../og-core" }
+memmap2 = { version = "0.9", optional = true }
+
+[features]
+# Native memory-mapped file access. Not a default feature and not usable on
+# wasm32-unknown-unknown (no filesystem in the browser) -- see docs/rules-notes.md.
+# The byte-decoding logic itself (disk.rs's BearoffData) has no platform dependency
+# and needs no feature: it works on any &[u8], however the caller obtained it.
+mmap = ["dep:memmap2"]
 
 [dev-dependencies]
 rand = "0.10.3"
