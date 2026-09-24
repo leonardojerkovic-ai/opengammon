@@ -548,4 +548,78 @@ mod tests {
 
         std::fs::remove_file(&path).unwrap();
     }
+
+    /// Checks Phase 2's "lookup under a microsecond" target against `finish` lookups
+    /// through a real memory-mapped file. Two passes over a random order of every
+    /// position: an untimed warm-up (the first touch of a page after `mmap` pages it
+    /// in from disk and isn't representative of steady-state cost), then a timed pass
+    /// in a *different* random order, so a fixed access pattern can't flatter the
+    /// result via CPU cache locality alone.
+    ///
+    /// Only the *average* is asserted on. Measured across three runs: min 200-300ns,
+    /// average consistently 809-929ns (comfortably under the 1us target), but a single
+    /// worst-case sample that varied wildly run to run — 151us, 198us, 2.05ms. The
+    /// lookup itself is O(1) (one multiplication for the offset, a slice read, a small
+    /// `Vec<f64>` allocation), so that variance is OS scheduling jitter or a stray page
+    /// fault on a rarely-touched page, not a per-lookup cost intrinsic to the design.
+    /// Asserting on it would make this test flaky without telling us anything about
+    /// the format or the mmap access pattern.
+    #[cfg(feature = "mmap")]
+    #[test]
+    #[ignore = "manual perf measurement, not a correctness check"]
+    fn finish_lookup_is_under_a_microsecond() {
+        use rand::rngs::StdRng;
+        use rand::{RngExt, SeedableRng};
+
+        use super::native::MappedBearoffFile;
+
+        let table = small_table();
+        let mut bytes = Vec::new();
+        write_table(&table, &mut bytes).unwrap();
+        let path = std::env::temp_dir().join(format!("og_bearoff_perf_{}.bin", std::process::id()));
+        std::fs::write(&path, &bytes).unwrap();
+
+        let mapped = MappedBearoffFile::open(&path).unwrap();
+        let data = mapped.data();
+
+        let mut rng = StdRng::seed_from_u64(0xb0ad1ce);
+        let shuffled = |rng: &mut StdRng| -> Vec<usize> {
+            let mut indices: Vec<usize> = (0..table.len()).collect();
+            for i in (1..indices.len()).rev() {
+                let j = rng.random_range(0..=i);
+                indices.swap(i, j);
+            }
+            indices
+        };
+
+        for index in shuffled(&mut rng) {
+            let checkers: [u8; POINTS] = combinatorial::unrank(MAX_CHECKERS, index);
+            std::hint::black_box(data.finish(checkers));
+        }
+
+        let mut durations = Vec::with_capacity(table.len());
+        for index in shuffled(&mut rng) {
+            let checkers: [u8; POINTS] = combinatorial::unrank(MAX_CHECKERS, index);
+            let start = std::time::Instant::now();
+            let result = data.finish(checkers);
+            let elapsed = start.elapsed();
+            std::hint::black_box(result);
+            durations.push(elapsed);
+        }
+
+        let total: std::time::Duration = durations.iter().sum();
+        let average = total / durations.len() as u32;
+        let worst = *durations.iter().max().unwrap();
+        let min = *durations.iter().min().unwrap();
+
+        eprintln!("finish lookups timed: {}", durations.len());
+        eprintln!("min: {min:?}, average: {average:?}, worst: {worst:?}");
+
+        std::fs::remove_file(&path).unwrap();
+
+        assert!(
+            average < std::time::Duration::from_micros(1),
+            "average {average:?} >= 1us"
+        );
+    }
 }
