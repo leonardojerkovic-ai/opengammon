@@ -43,3 +43,16 @@ prioritized; not commitments. See `OPENGAMMON.md` §4 for the phase each item li
   (run explicitly, same as the GNUbg differential tests, ideally with `--release`). Not
   confirmed as *the* cause — if `cargo test --workspace` ever aborts like this again with that
   test excluded, this hypothesis is wrong and needs revisiting.
+
+- **Phase 3:** `og-bearoff::disk::BearoffData::finish`/`first_off` allocate a `Vec<f64>` per call
+  (decode the quantized record into a fresh, owned, dequantized vector every lookup). Fine for
+  Phase 2's own validation and for the ~891ns-average measurement (`disk.rs`'s
+  `finish_lookup_is_under_a_microsecond`), but rollouts (Phase 3) call bearoff lookup from the
+  innermost loop, many times per trial, many trials per decision — that allocation pattern is
+  exactly the kind of per-call heap traffic `CLAUDE.md` §4's "hot path has no allocations where
+  avoidable" rule is about. Offer a zero-allocation access variant when Phase 3 actually needs it:
+  either return the raw quantized `&[u16]` slice straight into the mmapped (or in-memory, for WASM)
+  bytes and let the caller dequantize only the values it uses, or take a caller-supplied output
+  buffer (`&mut [f64]`) to write into instead of allocating one. Not done now — no rollout code
+  exists yet to benchmark against, and `CLAUDE.md` §4 is explicit: no optimization without a
+  benchmark that's shown the problem first.
