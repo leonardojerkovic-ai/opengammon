@@ -256,3 +256,43 @@ Only a comparison against GNUbg's own bearoff values (as above) can catch that c
 it did, for `first_off`. The Monte Carlo tests are evidence the DP correctly computes the
 distribution of *some* consistent policy; they are not evidence that policy is the right one. Keep
 running both checks; neither is a substitute for the other.
+
+## `finish` has rare, small near-tie deviations from GNUbg — inherited ones never surfaced
+
+Follow-up to the two entries above. The 300-position sample passed clean, but a fail-fast exhaustive
+run over all 54,264 positions hit one: index 17649 (`[1, 0, 4, 1, 2, 1]`), 0.207 percentage points
+over tolerance — an order of magnitude past ordinary rounding. Traced to source, not guessed: that
+position has three rolls (double-2, 2-5, 2-6) where `finish_score`'s best and second-best candidate
+plies are separated by as little as 0.0000376 expected rolls — small enough that our arbitrary
+lowest-rank-index tie-break can land on the opposite side from whatever GNUbg's own construction
+does, shifting probability mass between adjacent roll-counts by a fraction of a point even though
+the mean barely moves. Confirmed as a real numerical near-tie, not floating noise, because the exact
+same 0.0000376 gap recurred for two different rolls at that position — random noise wouldn't repeat.
+
+Unlike the `first_off` policy split, this has no clean semantic explanation to test without reading
+GNUbg's source — it's an ordinary numerical tie, not a different objective. Before deciding whether
+to chase a better tie-break, measured prevalence directly (no GNUbg calls, seconds not minutes):
+across all 971,172 (position, roll) decisions with 2+ legal plies, 5,514 (0.57%) have a gap under
+1e-4, touching 2,257 distinct positions (4.2% of the table) — rare but not vanishing. The smallest
+gap found anywhere in the table was exactly 0.
+
+The real risk this raised: a near-tie at one position can bias *every ancestor* in the DP too,
+however clean the ancestor's own roll-by-roll decisions are — so a comparison restricted to the
+2,257 "own near-tie" positions would have missed purely-inherited deviations entirely. Answered by
+making the exhaustive GNUbg comparison non-fatal (`gnubg_diff.rs`, tags each failure with whether it
+has its own near-tie via `one_sided::positions_with_near_tied_finish_choice`) and running it to
+completion instead of stopping at the first mismatch.
+
+**Result, full exhaustive run (54,264 positions, 2278s ≈ 38 minutes):** only **8 positions (0.015%)**
+exceed the 0.05 percentage-point tolerance, worst case 0.278 points. **All 8 have their own near-tie
+— zero are purely inherited.** The cascading-bias risk is real in principle but didn't materialize
+in practice here: apparently diluted enough by the convolution (a near-tie's effect on one roll out
+of 21 at each level up) that it never pushed an otherwise-clean ancestor over tolerance. `first_off`
+came back essentially exact — largest deviation 0.002 points across all 15,504 `off == 0` positions,
+indistinguishable from quantization noise.
+
+Left as a known, quantified limitation rather than chased further: 8 positions out of 54,264, all
+explained, all small, all traceable to the same root cause as the (already-documented) fact that
+`finish`'s policy isn't provably unique when candidate plies are this close. Revisit only if a later
+phase's rollout results turn out to be sensitive to sub-0.3-percentage-point bearoff distribution
+shape at these specific positions — not expected, but not asserted as impossible either.
